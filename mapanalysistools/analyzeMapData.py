@@ -176,7 +176,7 @@ def Imax(tb, data, sign=1):
     mpost = np.max(sign*data[trindx]) # response goes negative... 
     return(mpost)
 
-def analyze_protocol(data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eventhist=True, testplots=False):
+def analyze_protocol(data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eventstartthr=None, eventhist=True, testplots=False):
     use_AJ = True
     aj = minis_methods.AndradeJonas()
     cb = minis_methods.ClementsBekkers()
@@ -189,7 +189,7 @@ def analyze_protocol(data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eve
     wn = cutoff/nyquistfreq 
 #    print ('wn: ', wn) # 
     b, a = scipy.signal.bessel(2, wn)
-
+    print('SIGN: ', sign)
     for r in range(data.shape[0]):
         for t in range(data.shape[1]):
             data[r,t,:] = filtfunc(b, a, data[r, t, :] - np.mean(data[r, t, 0:250]))
@@ -225,13 +225,16 @@ def analyze_protocol(data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eve
             scale = []
             tpks = []
             smpks = []
+            smpksindex = []
             avgev = []
             avgtb = []
             avgnpts = []
             for i in range(data.shape[1]):  # all targets
                 if use_AJ:
                     idata = 1e12*data.view(np.ndarray)[j, i, :]
-                    aj.setup(tau1=taus[0], tau2=taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1), sign=sign)
+                    aj.setup(tau1=taus[0], tau2=taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
+                            sign=sign, eventstartthr=eventstartthr)
+                    print('AJ Sign: ', aj.sign)
                     meandata = np.mean(idata[:jmax])
                     aj.deconvolve(idata[:jmax]-meandata, 
                             thresh=threshold, llambda=10., order=7)
@@ -242,6 +245,7 @@ def analyze_protocol(data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eve
                     eventlist.append(tb[aj.onsets])
                     tpks.append(aj.peaks)
                     smpks.append(aj.smoothed_peaks)
+                    smpksindex.append(aj.smpkindex)
                     if aj.averaged:
                         avgev.append(aj.avgevent)
                         avgtb.append(aj.avgeventtb)
@@ -272,7 +276,7 @@ def analyze_protocol(data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eve
                             mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate/1000.,
                              cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
                         mpl.show()
-            events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks,
+            events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
                 'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts}
     print('analyze protocol returns, nevents = %d' % nevents)
     return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos, 'aj': aj, 'events': events, 'eventtimes': eventlist}

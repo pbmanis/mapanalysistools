@@ -48,11 +48,11 @@ class BuildGui():
         self.basename = '/Users/pbmanis/Documents/data/MRK_Pyramidal'        
         self.filename = None
         self.deltaI = 50. # pA
-        self.LPF = 2000. # Hz low pass filter
+        self.LPF = 4000. # Hz low pass filter
         self.event_taus = OrderedDict([('EPSC_fast', [0.1, 0.2]), ('IPSC_fast', [0.33, 1.5]),
             ('IPSC_slow', [1.5, 12.])])
-        self.threshold = 1.75
-        self.sign = -1.0
+        self.threshold = 2.0
+        self.sign = 1.0
         self.tree = tree
         self.data_plotted = False  # track plot of data
         self.measures = ['EPSC_fast', 'IPSC_fast', 'IPSC_slow']
@@ -296,8 +296,7 @@ class BuildGui():
     def test(self):
         # self.filename = os.path.join('2017.02.14_000/slice_000/cell_001/',
         #              'Map_NewBlueLaser_VC_single_MAX_002')
-        self.filename = os.path.join('2017.09.01_000/slice_001/cell_001/',
-                     'Map_NewBlueLaser_VC_single_005')
+        self.filename = os.path.join('2017.07.17_000/slice_000/cell_001/Map_NewBlueLaser_VC_10Hz_001')
         self.filename = self.get_filename(test=True)
         self.finish_read()
         self.analyze()
@@ -366,24 +365,24 @@ class BuildGui():
             taus = [mpa[eventtype+'_taur'], mpa[eventtype+'_tauf']]
             threshold = mpa[eventtype+'_threshold']
             results = AMD.analyze_protocol(self.data, self.time_base, self.scannerinfo, 
-                taus=taus, LPF=self.LPF, sign=signs[evi],
-                threshold=threshold, eventhist=True)
+                                            taus=taus, LPF=self.LPF, sign=signs[evi],
+                                            threshold=threshold, eventhist=True)
 
-            y=[]
+            y = []
             for x in range(len(results['eventtimes'])):
                 for xn in results['eventtimes'][x]:
                     y.append(xn)
             # et_indices = np.array(results['events'][0]['result'])  # get event time indices
             # events contains: ['avgnpts', 'peaktimes', 'avgtb', 'result', 'criteria', 'avgevent', 'smpks']
 
-            et_indices = np.array(results['events'][0]['peaktimes'])  # get event time indices
+            pk_indices = np.array(results['events'][0]['smpksindex'])  # get event time indices
             pk_values  = np.array(results['events'][0]['smpks'])  # get event time indices
 
             responses = np.where(results['events'][0]['avgnpts'] > 0)[0] # only if there is data... 
             if len(responses) == 0:
                 continue
             for i in range(self.data.shape[1]):
-                p = self.plots['Wave'].plot(self.time_base[et_indices[i]], 
+                p = self.plots['Wave'].plot(self.time_base[pk_indices[i]], 
                                 np.array(pk_values[i])+self.deltaI*i,
                                 symbol='o',
                                 pen = pg.mkPen(None), symbolBrush=pg.mkBrush(brushes[evi]),
