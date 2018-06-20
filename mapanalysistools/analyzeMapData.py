@@ -574,14 +574,16 @@ if __name__ == '__main__':
                         help='Turn off pdf for single run')
 
     args = parser.parse_args()
-    
-    plan = EP.DataPlan.DataPlan(os.path.join(datadir, args.datadict)).datasets
 
+    DP = EP.DataPlan.DataPlan(os.path.join(datadir, args.datadict))  # create a dataplan
+    plan = DP.datasets
     #print('plan: ', plan)
     if args.do_one != '':
-        cell = int(args.do_one)
+        cellid = int(args.do_one)
     else:
-        cell = 1
+        raise
+    cell = DP.excel_as_df[DP.excel_as_df['CellID'] == cellid].index[0]
+
     print('cell: ', cell)
     print('plan dict: ', plan.keys())
     print('cell: ', plan[cell]['Cell'])
@@ -592,6 +594,11 @@ if __name__ == '__main__':
         
         EPIV = EP.IVSummary.IVSummary(os.path.join(datapath, str(plan[cell]['IV']).strip()))
         EPIV.compute_iv()
+        print('cell: ', cell, plan[cell]['Cell'])
+        DP.post_result('CellID', cellid, 'RMP', EPIV.RM.analysis_summary['RMP'])
+        DP.post_result('CellID', cellid, 'Rin', EPIV.RM.analysis_summary['Rin'])
+        DP.post_result('CellID', cellid, 'taum', EPIV.RM.analysis_summary['taum'])
+        DP.update_xlsx(os.path.join(datadir, args.datadict), 'Dataplan')
         exit(1)
     
     if args.do_map:
