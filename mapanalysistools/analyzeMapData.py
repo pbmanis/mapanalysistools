@@ -44,10 +44,7 @@ from  matplotlib import colors as mcolors
 import matplotlib.cm
 import colormaps.parula
 import pylibrary.PlotHelpers as PH
-#import seaborn
-#cm_sns = mpl.cm.get_cmap('terrain')  # terrain is not bad
-#cm_sns = mpl.cm.get_cmap('parula')  # terrain is not bad
-#cm_sns = mpl.cm.get_cmap('jet')  # jet is terrible
+
 color_sequence = ['k', 'r', 'b']
 colormap = 'snshelix'
 
@@ -128,11 +125,8 @@ class AnalyzeMap(object):
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
         self.AR.setProtocol(protocolFilename)
-    #    a.setProtocol('/Volumes/Pegasus/ManisLab_Data3/Kasten, Michael/2017.11.20_000/slice_000/cell_000/CCIV_4nA_max_000')
         self.AR.getData()
         self.AR.getScannerPositions()
-        #mpl.plot(AR.scannerpositions[:,0], AR.scannerpositions[:,1], 'ro')
-        #mpl.show()
         data = np.reshape(self.AR.traces, (self.AR.repetitions, self.AR.traces.shape[0], self.AR.traces.shape[1]))
         endtime = timeit.default_timer()
         print("Time to read data: %f s" % (endtime-starttime))
@@ -241,7 +235,6 @@ class AnalyzeMap(object):
                         idata = 1e12*data.view(np.ndarray)[j, i, :]
                         aj.setup(tau1=taus[0], tau2=taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                                 sign=sign, eventstartthr=eventstartthr)
-                        print('AJ Sign: ', aj.sign)
                         meandata = np.mean(idata[:jmax])
                         aj.deconvolve(idata[:jmax]-meandata, 
                                 thresh=threshold, llambda=10., order=7)
@@ -285,7 +278,7 @@ class AnalyzeMap(object):
                             mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
                     'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts}
-        print('analyze protocol returns, nevents = %d' % nevents)
+        # print('analyze protocol returns, nevents = %d' % nevents)
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos, 'aj': aj, 'events': events, 'eventtimes': eventlist}
 
     def scale_and_rotate(self, poslist, sign=[1., 1.], scaleCorr=1., scale=1e6, autorotate=False, angle=0.):
@@ -325,8 +318,6 @@ class AnalyzeMap(object):
             a = t
         return(a, b)
 
-
-
     def shortName(self, name):
         (h, pr) = os.path.split(name)
         (h, cell) = os.path.split(h)
@@ -357,7 +348,7 @@ class AnalyzeMap(object):
         protodata = {}
         nmax = 1000
         data, tb, pars, info = self.readProtocol(filename, sparsity=None)
-        print('read from raw file')
+        # print('read from raw file')
         results = self.analyze_protocol(data, tb, info, taus=taus, LPF=LPF, sign=sign, threshold=threshold, eventhist=True)
         plot_all_traces(tb, data, title=filename)
     
@@ -442,10 +433,8 @@ class AnalyzeMap(object):
             vmax = np.max(measure)
         scaler = PH.NiceScale(0, vmax)
         vmax = scaler.niceMax
-        print('vmax: ', vmax)
         spotsize = 1e3*spotsize
         pos = self.scale_and_rotate(pos, scale=1.0, angle=angle)
-        print(pos.shape)
         xlim = [np.min(pos[:,0])-spotsize, np.max(pos[:,0])+spotsize]
         ylim = [np.min(pos[:,1])-spotsize, np.max(pos[:,1])+spotsize]
         # note circle size is radius, and is set by the laser spotsize (which is diameter)
@@ -457,17 +446,9 @@ class AnalyzeMap(object):
         maxv = np.max(measure)
         cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
         colors = cmx.to_rgba(measure/vmax)
-            #colors.append(mcolors.to_rgba(cm_sns(measure/vmax), alpha=0.6))
-        f, axe = mpl.subplots(1,1)
-        print('pos: ', pos)
-        print('spotsize: ', spotsize)
         ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
                     facecolor=colors, edgecolor='k', alpha=0.75)
-        # print(ec)
         axp.add_collection(ec)
-        #pm = PH.circles(pos[:,0], pos[:,1], spotsize/2., c=np.array(measure),
-         #                   vmax=vmax, vmin=vmin,
-         #                cmap=cm_sns, ax=axp, edgecolors='k', linewidths=0.5, alpha=0.9)
         if cellmarker:
             axp.plot([-cmrk, cmrk], [0., 0.], '-', color='r') # cell centered coorinates
             axp.plot([0., 0.], [-cmrk, cmrk], '-', color='r') # cell centered coorinates
@@ -481,19 +462,15 @@ class AnalyzeMap(object):
             c2.ax.tick_params(axis='y', direction='out')
         axp.scatter(pos[:,0], pos[:,1], s=2, marker='.', color='k', zorder=4)
         axr = 250.
-        print (xlim, ylim)
         # axp.set_xlim(xlim)
         # axp.set_ylim(ylim)
         axp.set_aspect('equal')
-
-       # axp.set_facecolor([0.6, 0.6, 0.9, 0.3])
-
         if vmaxin is None:
             return vmax
         else:
             return vmaxin
 
-    def display_one_map(self, dataset, imagefile=None, rotation = 0.0, measuretype = 'ZScore'):
+    def display_one_map(self, dataset, imagefile=None, sign=1, rotation=0.0, measuretype = 'ZScore'):
         self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
         print('read from raw file')
         # if writepickle:  # save the data off... moving sequences to nparrays seemed to solve a pickle problem...
@@ -502,7 +479,7 @@ class AnalyzeMap(object):
         #         'sequence2': np.array(pars['sequence2']['index']),
         #     }
         #     continue
-        results = self.analyze_protocol(self.data, self.tb, info, taus=[0.4, 5], sign=1, eventhist=plotevents)
+        results = self.analyze_protocol(self.data, self.tb, info, taus=[0.4, 5], sign=sign, eventhist=plotevents)
 
         # build a figure
         l_c1 = 0.1  # column 1 position
@@ -546,7 +523,6 @@ class AnalyzeMap(object):
         if self.AR.spotsize == None:
             self.AR.spotsize=50e-6
         self.newvmax = np.max(results[measuretype])
-        print('newmax: ', self.newvmax)
         
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], results[measuretype], 
             vmaxin=self.newvmax, imageHandle=self.MT, angle=rotation, spotsize=self.AR.spotsize)
@@ -557,119 +533,7 @@ class AnalyzeMap(object):
         # if not writepickle:
         mpl.show()
     
-    
-    # def run_analysis(self, dataplan, dhImage=None, rotation=0.):
-    #
-    #     # writepickle = False
-    #     # if 'writep' in sys.argv[1:]:
-    #     #     writepickle = True
-    #     plotFlag = True
-    #     protodata = {}
-    #     nmax = 1000
-    #
-    #     imgw = 0.25 # image box width
-    #     imgh = 0.25
-    #     l_c1 = 0.1  # column 1 position
-    #     l_c2 = 0.50 # column 2 position
-    #     trw = 0.32  # trace x width
-    #     trh = 0.10  # trace height
-    #     trs = imgh - trh  # 2nd trace position (offset from top of image box)
-    #     y = 0.08 + np.arange(0., 0.7, imgw+0.05)  # y positions
-    #
-    #     plotspecs = OrderedDict([('A', {'pos': [l_c1, imgw, y[2], imgh]}),
-    #                              ('B', {'pos': [l_c2, trw, y[2]+trs, trh]}),
-    #                              ('C', {'pos': [l_c2, trw, y[2], trh]}),
-    #                              ('D', {'pos': [l_c1, imgw, y[1], imgh]}),
-    #                              ('E', {'pos': [l_c2, trw, y[1]+trs, trh]}),
-    #                              ('F', {'pos': [l_c2, trw, y[1], trh]}),
-    #                              ('G', {'pos': [l_c1, imgw, y[0], imgh]}),
-    #                              ('H', {'pos': [l_c2, trw, y[0]+trs, trh]}),
-    #                              ('I', {'pos': [l_c2, trw, y[0], trh]}),
-    #                              ('A1', {'pos': [l_c1+imgw+0.01, 0.012, y[2], imgh]})])
-    #
-    #     P = PH.Plotter(plotspecs, label=False, figsize=(8., 6.))
-    #
-    #     mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}
-    #     # set up low-pass filter
-    #     self.newvmax = None
-    #
-    #     for ic, cell in enumerate(dataplan.datasets.keys()):
-    #         if cell not in [celln]:
-    #             continue
-    #         imagefile = None
-    #         if cell == 'cell3_low_power_image':
-    #             imagefile = os.path.join(datadir, dataplan.datasets[cell])
-    #             dhImage = DM.getDirHandle(protocolFilename, create=False)
-    #         if writepickle:
-    #             print('Will write pickled file')
-    #             pdata = OrderedDict()
-    #         dataset = dataplan.datasets[cell]
-    #         for ident, d in enumerate(dataset['runs']):
-    #             if d == '':
-    #                 continue
-    #             print ('Cell: ', cell)
-    #             protocolfilename = os.path.join(dataplan.datadir, d)
-    #              # check to see if pickled file exists first - it is faster to read
-    #             if os.path.isfile(cell + '.p') and not writepickle:
-    #                 d = read_pickled(cell)
-    #                 d = d['data']
-    #                 dx = d[protocolfilename]
-    #                 data = dx['data']
-    #                 tb = dx['tb']
-    #                 info = dx['info']
-    #                 pars = {'sequence1': dx['sequence1'], 'sequence2': dx['sequence2']}
-    #                 print('read from .p file')
-    #             else:
-    #                 data, tb, pars, info = readProtocol(protocolfilename, sparsity=None)
-    #                 print('read from raw file')
-    #             if writepickle:  # save the data off... moving sequences to nparrays seemed to solve a pickle problem...
-    #                 pdata[protocolfilename] = {'data': data, 'tb': tb, 'info': info ,
-    #                     'sequence1': np.array(pars['sequence1']['d']),
-    #                     'sequence2': np.array(pars['sequence2']['index']),
-    #                 }
-    #                 continue
-    #             results = analyze_protocol(data, tb, info, taus=[0.4, 5], sign=dataset['sign'], eventhist=plotevents)
-    #             if ident not in mapfromid.keys():
-    #                 print('ident: %d not in keys: ' % ident, mapfromid.keys())
-    #                 continue
-    #             idm = mapfromid[ident]
-    #             if ident == 0:
-    #                 cbar = P.axdict['A1']
-    #             else:
-    #                 cbar = None
-    #             #if dhImage is not None:
-    #             if self.AR.spotsize == None:
-    #                 self.AR.spotsize=50e-6
-    #             self.newvmax = self.plot_map(P.axdict[idm[0]], cbar, results['positions'], results['I_max'],
-    #                 vmaxin=self.newvmax, dh=dhImage, angle=rotation, spotsize=self.AR.spotsize*1e6)
-    # #            print('calling plottraces')
-    #             self.plot_traces(P.axdict[idm[1]], tb, np.mean(data, axis=0), color=color_sequence[ident])
-    #             # for i in range(len(results['events']['result'])):
-    #             #         A.axarr[0,0].plot(tb[0:len(results['events']['criteria'][i])], results['events']['criteria'][i])
-    #             #         A.axarr[1,0].plot(tb, 1e12*data[j, i, :])
-    #             #print('results[eventtimes]: ', results['eventtimes'])
-    #             if plotevents and len(results['eventtimes']) > 0:
-    #                 axh = P.axdict[idm[2]]
-    #                 y=[]
-    #                 for x in range(len(results['eventtimes'])):
-    #                     for xn in results['eventtimes'][x]:
-    #                         y.append(xn)
-    #                 axh.hist(y, 300, range=[0., 0.6], normed=1, facecolor='k')
-    #                 axh.set_xlim([0., 0.6])
-    #                # axh.set_ylim([0., 50.])
-    #                # mpl.show()
-    #             # if plotsummary and len(results['eventtimes']) > 0:
-    #             #     PN = PH.regular_grid(1 , 1, order='columns', figsize=(6., 6), showgrid=False,
-    #             #             verticalspacing=0.08, horizontalspacing=0.08,
-    #             #             margins={'leftmargin': 0.07, 'rightmargin': 0.20, 'topmargin': 0.03, 'bottommargin': 0.1},
-    #             #             labelposition=(-0.12, 0.95))
-    #             #
-    #             plot_all_traces(tb, data, protocolfilename)
-    #         if writepickle:
-    #             save_pickled(cell+'.p', pdata)
-    #
-    #     if not writepickle:
-    #         mpl.show()
+ 
 
 
 if __name__ == '__main__':
@@ -718,21 +582,7 @@ if __name__ == '__main__':
         plotevents = True
         dhImage = None
         rotation = 0
-        # if 'getimage' in sys.argv[1:]:
-        #     getimage = True
-        #     cell = 'cell3_low_power_image'
-        #     imagefile = os.path.join(dataplan.datadir, dataplan.datasets[cell])
-        #     dhImage = DM.getDirHandle(imagefile, create=False)
-        #     #print dhImage.indexFile()
-        #     print (dhImage.parent().info())
-        #     exit(1)
-        #     # print imageInfo['deviceTransform']['scale']
-        #     # print imageInfo['deviceTransform']['pos']
-        #     rotation =  0.865*np.pi
-        
-        print('map: ', plan[cell]['Map'])
-        print('plan cell: ', plan[cell])
         AM = AnalyzeMap()
         AM.display_one_map(os.path.join(datapath, str(plan[cell]['Map']).strip()),
-            imagefile=os.path.join(datapath, plan[cell]['Image'])+'.tif', rotation=rotation, measuretype='I_max')
+            imagefile=os.path.join(datapath, plan[cell]['Image'])+'.tif', sign=plan[cell]['Sign'], rotation=rotation, measuretype='I_max')
         mpl.show()
