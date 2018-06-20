@@ -119,13 +119,22 @@ class AnalyzeMap(object):
         self.SP = EP.SpikeAnalysis.SpikeAnalysis()
         self.RM = EP.RmTauAnalysis.RmTauAnalysis()
         self.MT = MONT.montager.Montager()
+        self.response_window = 0.030  # seconds
+        self.direct_window = 0.001
         self.twin_base = [0., 0.295]
-        self.twin_resp = [0.301, 0.4]
+        self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
         
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
         self.AR.setProtocol(protocolFilename)
         self.AR.getData()
+        print('protocol: ', protocolFilename)
+        self.stimtimes = self.AR.getBlueLaserTimes()
+        if self.stimtimes is not None:
+            self.twin_base = [0., self.stimtimes['start'][0] - 0.001]  # remember times are in seconds
+            self.twin_resp = []
+            for j in range(len(self.stimtimes['start'])):
+                self.twin_resp.append([self.stimtimes['start'][j]+self.direct_window, self.stimtimes['start'][j]+self.response_window])
         self.AR.getScannerPositions()
         data = np.reshape(self.AR.traces, (self.AR.repetitions, self.AR.traces.shape[0], self.AR.traces.shape[1]))
         endtime = timeit.default_timer()
@@ -146,7 +155,7 @@ class AnalyzeMap(object):
             ax[i].set_title(fne.replace('_', '\_'), fontsize=8)
             imfig.set_cmap(self.cmap)
         if show:
-            mpl.show()       
+            mpl.show()
 
     def set_analysis_windows(self):
         pass
@@ -155,20 +164,18 @@ class AnalyzeMap(object):
         """
         One-dimensional data...
         """
-
         # get indices for the integration windows
         tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
-        trindx = np.where((tb >= self.twin_resp[0]) & (tb < self.twin_resp[1]))
-        Qr = 1e6*np.sum(data[trindx])/(self.twin_resp[1]-self.twin_resp[0]) # response
+        trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
+        Qr = 1e6*np.sum(data[trindx])/(self.twin_resp[0][1]-self.twin_resp[0][0]) # response
         Qb = 1e6*np.sum(data[tbindx])/(self.twin_base[1]-self.twin_base[0])  # baseline
         return Qr, Qb
-
 
     def ZScore(self, tb, data, tbase=[0., 0.1], ):
         # abs(post.mean() - pre.mean()) / pre.std()
         # get indices for the integration windows
         tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
-        trindx = np.where((tb >= self.twin_resp[0]) & (tb < self.twin_resp[1]))
+        trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
         mpost = np.mean(data[trindx]) # response
         mpre = np.mean(data[tbindx])  # baseline
         return(np.fabs((mpost-mpre)/np.std(data[tbindx])))
@@ -176,7 +183,7 @@ class AnalyzeMap(object):
     def Imax(self, tb, data, sign=1):
 
         tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
-        trindx = np.where((tb >= self.twin_resp[0]) & (tb < self.twin_resp[1]))
+        trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
@@ -348,11 +355,22 @@ class AnalyzeMap(object):
         protodata = {}
         nmax = 1000
         data, tb, pars, info = self.readProtocol(filename, sparsity=None)
-        # print('read from raw file')
         results = self.analyze_protocol(data, tb, info, taus=taus, LPF=LPF, sign=sign, threshold=threshold, eventhist=True)
         plot_all_traces(tb, data, title=filename)
-    
         return(results)
+
+    def plot_timemarker(self, ax):
+        """
+        Plot a vertical time line marker for the stimuli
+        """
+        yl = ax.get_ylim()
+        # print(self.stimtimes)
+        # print(self.stimtimes['type'])
+        # exit(1)
+        for j in range(len(self.stimtimes['start'])):
+            t = self.stimtimes['start'][j]
+#            print('t: ', t)
+            ax.plot([t, t], yl, 'b-', linewidth=0.5)
 
     def plot_events(self, axh, axt, results, colorid=0):
         """
@@ -374,8 +392,7 @@ class AnalyzeMap(object):
                     y.append(xn)
             axh.hist(y, 300, range=[0., 0.6], normed=1, facecolor='k')
             axh.set_xlim([0., 0.6])
-            #axh.set_ylim([0., 50.])
-                   # mpl.show()
+            self.plot_timemarker(axh)
 
     def plot_all_traces(self, tb, mdata, title):
         f, ax = mpl.subplots(1,1)
@@ -383,6 +400,7 @@ class AnalyzeMap(object):
         for i in range(mdata.shape[1]):
             ax.plot(tb, mdata[0, i,:]*1e12 + stepi*i, linewidth=0.2)
         mpl.suptitle(title, fontsize=9)
+        self.plot_timemarker(ax)
         ax.set_xlim(0, 0.599)
 
     def plot_traces(self, ax, tb, mdata, color='k'):
