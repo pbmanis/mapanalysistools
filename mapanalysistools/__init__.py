@@ -11,4 +11,4 @@ import getTable
 import analyzeMapData
 import plotMapData
 import functions
-
+import colormaps

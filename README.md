@@ -16,11 +16,35 @@ plotMapData is the routine that was used in the Zhang et al 2017 paper for the T
 Dependencies
 ------------
 
-To read acq4 files (videos, scanning protocols, images):  ephysanalysis
+To read acq4 files (videos, scanning protocols, images):  ephysanalysis (https://github.com/pbmanis/ephysanalysis)
+To analyze events, minis (provides Andrade-Jonas and Clements Bekkers): minis (https://github.com/pbmanis/mini_analysis)
+pylibrary (plotting, findspikes) (https://github.com/pbmanis/pylibrary)
 
 pyqtgraph
 matplotlib
+seaborn
+xlrd
+pandas
+numpy
+re (regular expressions)
 
-pylibrary (https://github.com/pbmanis/pylibrary)
-minis (https://github.com/pbmanis/mini_analysis)
+Usage:
+usage: analyzeMapData.py [-h] [-i] [-o DO_ONE] [-m DO_MAP] [-c] [-v] datadict
+
+mini synaptic event analysis
+
+positional arguments:
+  datadict              data dictionary
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -i, --IV              just do iv
+  -o DO_ONE, --one DO_ONE
+                        just do one
+  -m DO_MAP, --map DO_MAP
+                        just do one map
+  -c, --check           Check for files; no analysis
+  -v, --view            Turn off pdf for single run
+  
+  
 

@@ -42,49 +42,23 @@ import matplotlib
 import matplotlib.collections as collections
 from  matplotlib import colors as mcolors
 import matplotlib.cm
-import colormaps.parula
+import colormaps
 import pylibrary.PlotHelpers as PH
 
 color_sequence = ['k', 'r', 'b']
-colormap = 'snshelix'
+colormap = 'parula'
 
 basedir = "/Users/pbmanis/Desktop/Python/mapAnalysisTools"
-
-# this was copied from the cell3 image .index file 
-imageInfo = OrderedDict([(u'region', [0, 0, 1376, 1024]),
-                    (u'transform',
-                        {'scale': (1.6349999896192458e-06, -1.6349999896192458e-06, 1.0),
-                        'angle': -0.0,
-                        'pos': (0.054586220532655716, 0.002669319976121187, -0.0013764000032097101),
-                        'axis': (0, 0, 1)}),
-                    (u'binning', [1, 1]),
-                    (u'__timestamp__', 1485552541.933),
-                    (u'__object_type__', 'ImageFile'),
-                    (u'fps', 1.683427746690181),
-                    (u'time', 1485552541.5737224),
-                    (u'objective', '4x 0.1na ACHROPLAN'),
-                    (u'deviceTransform',
-                        {'scale': (1.6349999896192458e-06, -1.6349999896192458e-06, 1.0),
-                        'angle': -0.0,
-                        'pos': (0.054586220532655716, 0.002669319976121187, -0.0013764000032097101),
-                        'axis': (0, 0, 1)}),
-                    (u'pixelSize', [1.6354024410247803e-06, 1.6349367797374725e-06]),
-                    (u'exposure', 0.5),
-                    (u'id', 71617),
-                    (u'triggerMode', 'Normal'),
-                    (u'frameTransform',
-                        {'scale': (1.0, 1.0, 1.0),
-                        'angle': 0.0,
-                        'pos': (0.0, 0.0, 0.0),
-                        'axis': (0, 0, 1)})
-                    ])
 
 re_degree = re.compile('\s*(\d{1,3}d)\s*')
 re_duration = re.compile('(\d{1,3}ms)')
 
 def setMapColors(colormap, reverse=False):
+    import colormaps
     if colormap == 'terrain':
         cm_sns = mpl.cm.get_cmap('terrain_r')  # terrain is not bad    #
+    elif colormap == 'gray':
+        cm_sns = mpl.cm.get_cmap('gray')  # basic gray scale map
     # elif colormap == 'cubehelix':
     #     cm_sns = seaborn.cubehelix_palette(n_colors=6, start=0, rot=0.4, gamma=1.0,
     #         hue=0.8, light=0.85, dark=0.15, reverse=reverse, as_cmap=False)
@@ -93,7 +67,7 @@ def setMapColors(colormap, reverse=False):
     #      as_cmap=True)
     elif colormap == 'a':
         from colormaps import option_a
-        cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_a', option_a.cm_data)
+        cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_a', colormaps.option_a.cm_data)
     elif colormap == 'b':
         import colormaps.option_b
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_b', colormaps.option_b.cm_data)
@@ -107,9 +81,10 @@ def setMapColors(colormap, reverse=False):
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('parula', colormaps.parula.cm_data)
     else:
         print('Unrecongnized color map {0:s}; setting to "parula"'.format(colormap))
-        import colormaps.parula
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('parula', colormaps.parula.cm_data)
     return cm_sns    
+
+cm_sns = setMapColors('parula')
 
 
 class AnalyzeMap(object):
@@ -123,6 +98,10 @@ class AnalyzeMap(object):
         self.direct_window = 0.001
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
+        self.taus = [0.5, 2.0]
+        self.threshold = 4.0
+        self.sign = -1  # negative for EPSC, positive for IPSC
+        self.overlay_scale = 0.
         
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
@@ -176,6 +155,8 @@ class AnalyzeMap(object):
         # get indices for the integration windows
         tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
         trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
+        print('max tb: ', np.max(tb), 'base: ', self.twin_base, 'resp: ', self.twin_resp)
+        print(trindx, tbindx)
         mpost = np.mean(data[trindx]) # response
         mpre = np.mean(data[tbindx])  # baseline
         return(np.fabs((mpost-mpre)/np.std(data[tbindx])))
@@ -187,7 +168,7 @@ class AnalyzeMap(object):
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
-    def analyze_protocol(self, data, tb, info, taus, LPF=5000., sign=1, threshold=2.0, eventstartthr=None, eventhist=True, testplots=False):
+    def analyze_protocol(self, data, tb, info, LPF=5000., eventstartthr=None, eventhist=True, testplots=False):
         use_AJ = True
         aj = minis_methods.AndradeJonas()
         cb = minis_methods.ClementsBekkers()
@@ -212,7 +193,7 @@ class AnalyzeMap(object):
         for t in range(data.shape[1]):  # compute for each target
             Qr[t], Qb[t] = self.calculate_charge(tb, mdata[t,:])
             Zscore[t] = self.ZScore(tb, mdata[t,:])
-            I_max[t] = self.Imax(tb, data[0,t,:], sign=-1)*1e12  # just the FIRST pass
+            I_max[t] = self.Imax(tb, data[0,t,:], sign=self.sign)*1e12  # just the FIRST pass
             try:
                 pos[t,:] = [info[(0,t)]['pos'][0], info[(0,t)]['pos'][1]]
             except:
@@ -222,8 +203,8 @@ class AnalyzeMap(object):
         eventlist = []  # event histogram across ALL events/trials
         nevents = 0
         if eventhist:
-            v = [-1.0, 0., taus[0], taus[1]]
-            x = np.linspace(0., taus[1]*5, int(50./rate))
+            v = [-1.0, 0., self.taus[0], self.taus[1]]
+            x = np.linspace(0., self.taus[1]*5, int(50./rate))
             cbtemplate = functions.pspFunc(v, x, risePower=2.0).view(np.ndarray)
             tmaxev = 600. # msec
             jmax = int(tmaxev/rate)
@@ -240,11 +221,11 @@ class AnalyzeMap(object):
                 for i in range(data.shape[1]):  # all targets
                     if use_AJ:
                         idata = 1e12*data.view(np.ndarray)[j, i, :]
-                        aj.setup(tau1=taus[0], tau2=taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
-                                sign=sign, eventstartthr=eventstartthr)
+                        aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
+                                sign=self.sign, eventstartthr=eventstartthr)
                         meandata = np.mean(idata[:jmax])
                         aj.deconvolve(idata[:jmax]-meandata, 
-                                thresh=threshold, llambda=10., order=7)
+                                thresh=self.threshold, llambda=10., order=7)
                         # if len(aj.onsets) == 0:  # no events, so skip
                         #     continue
                         nevents += len(aj.onsets)
@@ -267,7 +248,7 @@ class AnalyzeMap(object):
                       #  print ('eventlist: ', eventlist)
                     else:
                         res = cb.cbTemplateMatch(1e12*data.view(np.ndarray)[j, i, :jmax], 
-                                template=cbtemplate, threshold=2.5, sign=1)
+                                template=cbtemplate, threshold=self.threshold, sign=self.sign)
                         result.append(res)
                         crit.append(cb.Crit)
                         scale.append(cb.Scale)
@@ -351,12 +332,12 @@ class AnalyzeMap(object):
         return(data)
 
     def analyze_file(self, filename, dhImage=None, plotFlag=False, 
-            taus=[0.33, 4.0], LPF=5000., sign=1, threshold=2.0):
+            LPF=5000.):
         protodata = {}
         nmax = 1000
         data, tb, pars, info = self.readProtocol(filename, sparsity=None)
-        results = self.analyze_protocol(data, tb, info, taus=taus, LPF=LPF, sign=sign, threshold=threshold, eventhist=True)
-        plot_all_traces(tb, data, title=filename)
+        results = self.analyze_protocol(data, tb, info, LPF=LPF, eventhist=True)
+        plot_all_traces(tb, data, title=filename, events=results['events'])
         return(results)
 
     def plot_timemarker(self, ax):
@@ -394,11 +375,17 @@ class AnalyzeMap(object):
             axh.set_xlim([0., 0.6])
             self.plot_timemarker(axh)
 
-    def plot_all_traces(self, tb, mdata, title):
-        f, ax = mpl.subplots(1,1)
+    def plot_all_traces(self, tb, mdata, title, events=None, ax=None):
+        if ax is None:
+            f, ax = mpl.subplots(1,1)
         stepi = 20.
         for i in range(mdata.shape[1]):
             ax.plot(tb, mdata[0, i,:]*1e12 + stepi*i, linewidth=0.2)
+            if events is not None:
+                #print(events[i]['smpksindex'])
+                ax.plot(tb[events[0]['smpksindex'][i]], mdata[0, i, events[0]['smpksindex'][i]]*1e12 + stepi*i,
+                     'ro', markersize=3, markeredgecolor=None)
+            
         mpl.suptitle(title, fontsize=9)
         self.plot_timemarker(ax)
         ax.set_xlim(0, 0.599)
@@ -406,7 +393,18 @@ class AnalyzeMap(object):
     def plot_traces(self, ax, tb, mdata, color='k'):
         ax.plot(tb, np.mean(mdata, axis=0)*1e12, color)
         ax.set_xlim([0., 0.6])
-     #   ax.set_ylim([-100., 20.])
+        if self.sign < 0:
+            ax.set_ylim([-100., 20.])
+        else:
+            ax.set_ylim([-20., 100.])
+
+    def clip_colors(self, cmap, clipcolor):
+        cmax = len(cmap)
+        colmax = cmap[cmax-1]
+        for i in range(cmax):
+            if (cmap[i] == colmax).all():
+                cmap[i] = clipcolor
+        return cmap
 
     def plot_map(self, axp, axcbar, pos, measure, vmaxin=None, 
             imageHandle=None, angle=0, spotsize=20e-6, cellmarker=False):
@@ -440,7 +438,7 @@ class AnalyzeMap(object):
                 img = scipy.ndimage.interpolation.rotate(img, angle*180./np.pi + 90., axes=(1, 0),
                     reshape=True, output=None, order=3, mode='constant', cval=0.0, prefilter=True)
 #            axp.imshow(img, extent=extents, aspect='auto', origin='lower')
-            axp.imshow(img, aspect='equal', extent=extents, origin='lower')
+            axp.imshow(img, aspect='equal', extent=extents, origin='lower', cmap=setMapColors('gray'))
         # mpl.show()
         # exit(1)
         vmin = 0.
@@ -456,14 +454,13 @@ class AnalyzeMap(object):
         xlim = [np.min(pos[:,0])-spotsize, np.max(pos[:,0])+spotsize]
         ylim = [np.min(pos[:,1])-spotsize, np.max(pos[:,1])+spotsize]
         # note circle size is radius, and is set by the laser spotsize (which is diameter)
-        ec = []
         spotsize = spotsize
         radw = np.ones(pos.shape[0])*spotsize
         radh = np.ones(pos.shape[0])*spotsize
-        colors = []
-        maxv = np.max(measure)
         cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
-        colors = cmx.to_rgba(measure/vmax)
+        print('vmax: ', vmax)
+        colors = cmx.to_rgba(np.clip(measure/vmax, 0., 1.))
+        colors = self.clip_colors(colors, [1., 1., 1., 1.])
         ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
                     facecolor=colors, edgecolor='k', alpha=0.75)
         axp.add_collection(ec)
@@ -478,7 +475,7 @@ class AnalyzeMap(object):
             norm = matplotlib.colors.Normalize(vmin=0, vmax=vmax)
             c2 = matplotlib.colorbar.ColorbarBase(axcbar, cmap=cm_sns, ticks=ticks, norm=norm)
             c2.ax.tick_params(axis='y', direction='out')
-        axp.scatter(pos[:,0], pos[:,1], s=2, marker='.', color='k', zorder=4)
+       # axp.scatter(pos[:,0], pos[:,1], s=2, marker='.', color='k', zorder=4)
         axr = 250.
         # axp.set_xlim(xlim)
         # axp.set_ylim(ylim)
@@ -488,7 +485,7 @@ class AnalyzeMap(object):
         else:
             return vmaxin
 
-    def display_one_map(self, dataset, imagefile=None, sign=1, rotation=0.0, measuretype = 'ZScore'):
+    def display_one_map(self, dataset, imagefile=None, rotation=0.0, measuretype=None):
         self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
         print('read from raw file')
         # if writepickle:  # save the data off... moving sequences to nparrays seemed to solve a pickle problem...
@@ -497,7 +494,7 @@ class AnalyzeMap(object):
         #         'sequence2': np.array(pars['sequence2']['index']),
         #     }
         #     continue
-        results = self.analyze_protocol(self.data, self.tb, info, taus=[0.4, 5], sign=sign, eventhist=plotevents)
+        results = self.analyze_protocol(self.data, self.tb, info, eventhist=plotevents)
 
         # build a figure
         l_c1 = 0.1  # column 1 position
@@ -509,18 +506,25 @@ class AnalyzeMap(object):
         trs = imgh - trh  # 2nd trace position (offset from top of image box)
         y = 0.08 + np.arange(0., 0.7, imgw+0.05)  # y positions 
         self.mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}
-        self.plotspecs = OrderedDict([('A', {'pos': [l_c1, imgw, y[2], imgh]}), 
-                                 ('B', {'pos': [l_c2, trw, y[2]+trs, trh]}),
-                                 ('C', {'pos': [l_c2, trw, y[2], trh]}),
-                                 ('D', {'pos': [l_c1, imgw, y[1], imgh]}), 
-                                 ('E', {'pos': [l_c2, trw, y[1]+trs, trh]}), 
-                                 ('F', {'pos': [l_c2, trw, y[1], trh]}),
-                                 ('G', {'pos': [l_c1, imgw, y[0], imgh]}), 
-                                 ('H', {'pos': [l_c2, trw, y[0]+trs, trh]}), 
-                                 ('I', {'pos': [l_c2, trw, y[0], trh]}),
-                                 ('A1', {'pos': [l_c1+imgw+0.01, 0.012, y[2], imgh]})])
+        # self.plotspecs = OrderedDict([('A', {'pos': [l_c1, imgw, y[2], imgh]}),
+        #                          ('B', {'pos': [l_c2, trw, y[2]+trs, trh]}),
+        #                          ('C', {'pos': [l_c2, trw, y[2], trh]}),
+        #                          ('D', {'pos': [l_c1, imgw, y[1], imgh]}),
+        #                          ('E', {'pos': [l_c2, trw, y[1]+trs, trh]}),
+        #                          ('F', {'pos': [l_c2, trw, y[1], trh]}),
+        #                          ('G', {'pos': [l_c1, imgw, y[0], imgh]}),
+        #                          ('H', {'pos': [l_c2, trw, y[0]+trs, trh]}),
+        #                          ('I', {'pos': [l_c2, trw, y[0], trh]}),
+        #                          ('A1', {'pos': [l_c1+imgw+0.01, 0.012, y[2], imgh]})])
+        
+        self.plotspecs = OrderedDict([('A', {'pos': [0.1, 0.4, 0.5, 0.4]}),
+                                 ('B', {'pos': [0.65, 0.3, 0.65, 0.25]}),
+                                 ('C', {'pos': [0.65, 0.3, 0.35, 0.25]}),
+                                 ('A1', {'pos': [0.5+0.01, 0.012, 0.5, 0.4]}),
+                                 ('D', {'pos': [0.1, 0.4, 0.07, 0.4]})
+                                 ])  # a1 is cal bar
 
-        self.P = PH.Plotter(self.plotspecs, label=False, figsize=(8., 6.))
+        self.P = PH.Plotter(self.plotspecs, label=False, figsize=(10., 8.))
 
         self.plot_events(self.P.axdict['B'], self.P.axdict['C'], results)
         
@@ -541,10 +545,12 @@ class AnalyzeMap(object):
         if self.AR.spotsize == None:
             self.AR.spotsize=50e-6
         self.newvmax = np.max(results[measuretype])
-        
+        if self.overlay_scale > 0.:
+            self.newvmax = self.overlay_scale
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], results[measuretype], 
             vmaxin=self.newvmax, imageHandle=self.MT, angle=rotation, spotsize=self.AR.spotsize)
-        self.plot_all_traces(self.tb, self.data, dataset)
+        print(results['events'].keys())
+        self.plot_all_traces(self.tb, self.data, dataset, events=results['events'], ax=self.P.axdict['D'])
     # if writepickle:
     #     save_pickled(cell+'.p', pdata)
 
@@ -552,13 +558,13 @@ class AnalyzeMap(object):
         mpl.show()
     
  
-
-
 if __name__ == '__main__':
     datadir = '/Users/pbmanis/Documents/data/MRK_Pyramidal'
     parser = argparse.ArgumentParser(description='mini synaptic event analysis')
     parser.add_argument('datadict', type=str,
                         help='data dictionary')
+    parser.add_argument('-s', '--scale', type=float, default=0., dest='scale',
+                        help='set maximum scale for overlay plot (default=0 -> auto)')
     parser.add_argument('-i', '--IV', action='store_true', dest='do_iv',
                         help='just do iv')
     parser.add_argument('-o', '--one', type=str, default='', dest='do_one',
@@ -588,7 +594,7 @@ if __name__ == '__main__':
     print('plan dict: ', plan.keys())
     print('cell: ', plan[cell]['Cell'])
     datapath = os.path.join(datadir, str(plan[cell]['Date']).strip(), str(plan[cell]['Slice']).strip(), str(plan[cell]['Cell']).strip())
-    print( args)
+   # print( args)
     
     if args.do_iv:
         
@@ -602,12 +608,13 @@ if __name__ == '__main__':
         exit(1)
     
     if args.do_map:
-        cm_sns = setMapColors(colormap, reverse=True)
         getimage = True
         plotevents = True
         dhImage = None
         rotation = 0
         AM = AnalyzeMap()
+        AM.sign = plan[cell]['Sign']
+        AM.overlay_scale = args.scale
         AM.display_one_map(os.path.join(datapath, str(plan[cell]['Map']).strip()),
-            imagefile=os.path.join(datapath, plan[cell]['Image'])+'.tif', sign=plan[cell]['Sign'], rotation=rotation, measuretype='I_max')
+            imagefile=os.path.join(datapath, plan[cell]['Image'])+'.tif', rotation=rotation, measuretype='ZScore')
         mpl.show()
