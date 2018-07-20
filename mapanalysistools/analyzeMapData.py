@@ -559,7 +559,7 @@ class AnalyzeMap(object):
     
  
 if __name__ == '__main__':
-    datadir = '/Users/pbmanis/Documents/data/MRK_Pyramidal'
+    datadir = '/Volumes/PBM_004/data/MRK/Pyramidal'
     parser = argparse.ArgumentParser(description='mini synaptic event analysis')
     parser.add_argument('datadict', type=str,
                         help='data dictionary')
@@ -583,15 +583,18 @@ if __name__ == '__main__':
 
     DP = EP.DataPlan.DataPlan(os.path.join(datadir, args.datadict))  # create a dataplan
     plan = DP.datasets
-    #print('plan: ', plan)
+    print('plan dict: ', plan.keys())
+        #print('plan: ', plan)
     if args.do_one != '':
         cellid = int(args.do_one)
     else:
-        raise
+        raise ValueError('no cell id found for %s' % args.do_one)
+
     cell = DP.excel_as_df[DP.excel_as_df['CellID'] == cellid].index[0]
 
+    print('cellid: ', cellid)
     print('cell: ', cell)
-    print('plan dict: ', plan.keys())
+
     print('cell: ', plan[cell]['Cell'])
     datapath = os.path.join(datadir, str(plan[cell]['Date']).strip(), str(plan[cell]['Slice']).strip(), str(plan[cell]['Cell']).strip())
    # print( args)
