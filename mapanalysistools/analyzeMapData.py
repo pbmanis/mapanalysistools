@@ -32,6 +32,15 @@ import timeit
 import ephysanalysis as EP
 import montage as MONT
 
+import matplotlib
+rcParams = matplotlib.rcParams
+rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
+rcParams['pdf.fonttype'] = 42
+rcParams['ps.fonttype'] = 42
+rcParams['text.latex.unicode'] = True
+rcParams['font.family'] = 'sans-serif'
+rcParams['font.weight'] = 'regular'                  # you can omit this, it's the default
+rcParams['font.sans-serif'] = ['Arial']
 #from pyqtgraph.metaarray import MetaArray
 
 import functions
@@ -607,6 +616,8 @@ if __name__ == '__main__':
         DP.post_result('CellID', cellid, 'RMP', EPIV.RM.analysis_summary['RMP'])
         DP.post_result('CellID', cellid, 'Rin', EPIV.RM.analysis_summary['Rin'])
         DP.post_result('CellID', cellid, 'taum', EPIV.RM.analysis_summary['taum'])
+        now = datetime.datetime.now()
+        DP.post_result('CellID', cellid, 'IV Date', str(now.strftime("%Y-%m-%d %H:%M")))
         DP.update_xlsx(os.path.join(datadir, args.datadict), 'Dataplan')
         exit(1)
     
