@@ -1,10 +1,13 @@
-import colormaps.option_a
-import colormaps.option_b
-import colormaps.option_c
-import colormaps.option_d
-import colormaps.RdBuGnYl_r_v2
-import colormaps.blu_grn_pnk2
-import colormaps.parula
-import colormaps.PuBuGnYl_r
-import colormaps.RdBuGnYl_r
-import colormaps.fake_parula
+from __future__ import absolute_import
+
+from ..colormaps import option_a
+from ..colormaps import option_a
+from ..colormaps import option_b
+from ..colormaps import option_c
+from ..colormaps import option_d
+from ..colormaps import RdBuGnYl_r_v2
+from ..colormaps import blu_grn_pnk2
+from ..colormaps import parula
+from ..colormaps import PuBuGnYl_r
+from ..colormaps import RdBuGnYl_r
+from ..colormaps import fake_parula

@@ -1,4 +1,5 @@
 from __future__ import print_function
+from __future__ import absolute_import
 
 import pandas as pd
 import sip
@@ -18,7 +19,7 @@ import pyqtgraph as pg
 from pyqtgraph.parametertree import Parameter, ParameterTree
 
 from ephysanalysis import acq4read
-import analyzeMapData as AMD
+from . import analyzeMapData as AMD
 import pylibrary.fileselector as FS
 
 AR = acq4read.Acq4Read()  # instance of the acq4 file reader

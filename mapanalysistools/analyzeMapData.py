@@ -1,5 +1,5 @@
 from __future__ import print_function
-
+from __future__ import absolute_import
 """
 
 This code was build to process the TTX experimetns with maps directly from the data, but
@@ -43,7 +43,7 @@ rcParams['font.weight'] = 'regular'                  # you can omit this, it's t
 rcParams['font.sans-serif'] = ['Arial']
 #from pyqtgraph.metaarray import MetaArray
 
-import functions
+from mapanalysistools import functions
 from minis import minis_methods
 import matplotlib.pyplot as mpl
 import matplotlib.colors
@@ -51,22 +51,24 @@ import matplotlib
 import matplotlib.collections as collections
 from  matplotlib import colors as mcolors
 import matplotlib.cm
-import colormaps
+from mapanalysistools import colormaps
 import pylibrary.PlotHelpers as PH
 
 color_sequence = ['k', 'r', 'b']
-colormap = 'parula'
+colormapname = 'parula'
 
 basedir = "/Users/pbmanis/Desktop/Python/mapAnalysisTools"
 
 re_degree = re.compile('\s*(\d{1,3}d)\s*')
 re_duration = re.compile('(\d{1,3}ms)')
 
-def setMapColors(colormap, reverse=False):
-    import colormaps
-    if colormap == 'terrain':
+print ('maps: ', colormaps)
+print(dir(colormaps))
+def setMapColors(colormapname, reverse=False):
+    from mapanalysistools import colormaps
+    if colormapname == 'terrain':
         cm_sns = mpl.cm.get_cmap('terrain_r')  # terrain is not bad    #
-    elif colormap == 'gray':
+    elif colormapname == 'gray':
         cm_sns = mpl.cm.get_cmap('gray')  # basic gray scale map
     # elif colormap == 'cubehelix':
     #     cm_sns = seaborn.cubehelix_palette(n_colors=6, start=0, rot=0.4, gamma=1.0,
@@ -74,22 +76,22 @@ def setMapColors(colormap, reverse=False):
     # elif colormap == 'snshelix':
     #     cm_sns = seaborn.cubehelix_palette(n_colors=64, start=3, rot=0.5, gamma=1.0, dark=0, light=1.0, reverse=reverse,
     #      as_cmap=True)
-    elif colormap == 'a':
+    elif colormapname == 'a':
         from colormaps import option_a
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_a', colormaps.option_a.cm_data)
-    elif colormap == 'b':
+    elif colormapname == 'b':
         import colormaps.option_b
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_b', colormaps.option_b.cm_data)
-    elif colormap == 'c':
+    elif colormapname == 'c':
         import colormaps.option_c
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_c', colormaps.option_c.cm_data)
-    elif colormap == 'd':
+    elif colormapname == 'd':
         import colormaps.option_a
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('option_d', colormaps.option_d.cm_data)
-    elif colormap == 'parula':
+    elif colormapname == 'parula':
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('parula', colormaps.parula.cm_data)
     else:
-        print('Unrecongnized color map {0:s}; setting to "parula"'.format(colormap))
+        print('Unrecongnized color map {0:s}; setting to "parula"'.format(colormapname))
         cm_sns = matplotlib.colors.LinearSegmentedColormap.from_list('parula', colormaps.parula.cm_data)
     return cm_sns    
 
@@ -590,6 +592,11 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    filename = os.path.join(datadir, args.datadict)
+    if not os.path.isfile(filename):
+        print('File not found: %s' % filename)
+        exit(1)
+
     DP = EP.DataPlan.DataPlan(os.path.join(datadir, args.datadict))  # create a dataplan
     plan = DP.datasets
     print('plan dict: ', plan.keys())
@@ -598,7 +605,7 @@ if __name__ == '__main__':
         cellid = int(args.do_one)
     else:
         raise ValueError('no cell id found for %s' % args.do_one)
-
+    print(dir(DP))
     cell = DP.excel_as_df[DP.excel_as_df['CellID'] == cellid].index[0]
 
     print('cellid: ', cellid)
