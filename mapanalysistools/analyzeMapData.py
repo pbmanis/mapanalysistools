@@ -100,7 +100,7 @@ cm_sns = setMapColors('parula')
 
 class AnalyzeMap(object):
     
-    def __init__(self):
+    def __init__(self, rasterize=True):
         self.AR = EP.acq4read.Acq4Read()
         self.SP = EP.SpikeAnalysis.SpikeAnalysis()
         self.RM = EP.RmTauAnalysis.RmTauAnalysis()
@@ -112,7 +112,12 @@ class AnalyzeMap(object):
         self.taus = [0.5, 2.0]
         self.threshold = 4.0
         self.sign = -1  # negative for EPSC, positive for IPSC
+        self.scale_factor = 1. # scale factore for data (convert to pA or mV,,, )
         self.overlay_scale = 0.
+        self.stepi = 20.
+        self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
+        self.rasterize = rasterize
+        
         
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
@@ -166,8 +171,8 @@ class AnalyzeMap(object):
         # get indices for the integration windows
         tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
         trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
-        print('max tb: ', np.max(tb), 'base: ', self.twin_base, 'resp: ', self.twin_resp)
-        print(trindx, tbindx)
+        #print('max tb: ', np.max(tb), 'base: ', self.twin_base, 'resp: ', self.twin_resp)
+        #print(trindx, tbindx)
         mpost = np.mean(data[trindx]) # response
         mpre = np.mean(data[tbindx])  # baseline
         return(np.fabs((mpost-mpre)/np.std(data[tbindx])))
@@ -204,7 +209,7 @@ class AnalyzeMap(object):
         for t in range(data.shape[1]):  # compute for each target
             Qr[t], Qb[t] = self.calculate_charge(tb, mdata[t,:])
             Zscore[t] = self.ZScore(tb, mdata[t,:])
-            I_max[t] = self.Imax(tb, data[0,t,:], sign=self.sign)*1e12  # just the FIRST pass
+            I_max[t] = self.Imax(tb, data[0,t,:], sign=self.sign)*self.scale_factor  # just the FIRST pass
             try:
                 pos[t,:] = [info[(0,t)]['pos'][0], info[(0,t)]['pos'][1]]
             except:
@@ -231,7 +236,7 @@ class AnalyzeMap(object):
                 avgnpts = []
                 for i in range(data.shape[1]):  # all targets
                     if use_AJ:
-                        idata = 1e12*data.view(np.ndarray)[j, i, :]
+                        idata = data.view(np.ndarray)[j, i, :]
                         aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                                 sign=self.sign, eventstartthr=eventstartthr)
                         meandata = np.mean(idata[:jmax])
@@ -258,7 +263,7 @@ class AnalyzeMap(object):
                             aj.plots(title='%d' % i, events=None)
                       #  print ('eventlist: ', eventlist)
                     else:
-                        res = cb.cbTemplateMatch(1e12*data.view(np.ndarray)[j, i, :jmax], 
+                        res = cb.cbTemplateMatch(data.view(np.ndarray)[j, i, :jmax], 
                                 template=cbtemplate, threshold=self.threshold, sign=self.sign)
                         result.append(res)
                         crit.append(cb.Crit)
@@ -269,9 +274,9 @@ class AnalyzeMap(object):
                                 eventlist.append(r[0]*rate)
                         if testplots:
     #                        print ('testplots')
-                            mpl.plot(tb, 1e12*data.view(np.ndarray)[j, i, :], 'k-', linewidth=0.5)
+                            mpl.plot(tb, self.scale_factor*data.view(np.ndarray)[j, i, :], 'k-', linewidth=0.5)
                             for k in range(len(res)):
-                                mpl.plot(tb[res[k][0]], 1e12*data.view(np.ndarray)[j, i, res[k][0]], 'ro')
+                                mpl.plot(tb[res[k][0]], self.scale_factor*data.view(np.ndarray)[j, i, res[k][0]], 'ro')
                                 mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate/1000.,
                                  cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
                             mpl.show()
@@ -362,7 +367,7 @@ class AnalyzeMap(object):
         for j in range(len(self.stimtimes['start'])):
             t = self.stimtimes['start'][j]
 #            print('t: ', t)
-            ax.plot([t, t], yl, 'b-', linewidth=0.5)
+            ax.plot([t, t], yl, 'b-', linewidth=0.5, alpha=0.6, rasterized=self.rasterize)
 
     def plot_events(self, axh, axt, results, colorid=0):
         """
@@ -382,32 +387,38 @@ class AnalyzeMap(object):
             for x in range(len(results['eventtimes'])):
                 for xn in results['eventtimes'][x]:
                     y.append(xn)
-            axh.hist(y, 300, range=[0., 0.6], normed=1, facecolor='k')
-            axh.set_xlim([0., 0.6])
+            axh.hist(y, bins=np.linspace(0, 0.6, 301), facecolor='k', histtype='stepfilled', align='right')
             self.plot_timemarker(axh)
+            axh.set_xlim([0., 0.6])
 
     def plot_all_traces(self, tb, mdata, title, events=None, ax=None):
         if ax is None:
             f, ax = mpl.subplots(1,1)
-        stepi = 20.
         for i in range(mdata.shape[1]):
-            ax.plot(tb, mdata[0, i,:]*1e12 + stepi*i, linewidth=0.2)
+            ax.plot(tb, mdata[0, i,:]*self.scale_factor + self.stepi*i, linewidth=0.2,  rasterized=self.rasterize)
             if events is not None:
                 #print(events[i]['smpksindex'])
-                ax.plot(tb[events[0]['smpksindex'][i]], mdata[0, i, events[0]['smpksindex'][i]]*1e12 + stepi*i,
-                     'ro', markersize=3, markeredgecolor=None)
+                ax.plot(tb[events[0]['smpksindex'][i]], mdata[0, i, events[0]['smpksindex'][i]]*self.scale_factor + self.stepi*i,
+                     'ro', markersize=3, markeredgecolor=None, rasterized=self.rasterize)
             
         mpl.suptitle(title, fontsize=9)
         self.plot_timemarker(ax)
         ax.set_xlim(0, 0.599)
 
     def plot_traces(self, ax, tb, mdata, color='k'):
-        ax.plot(tb, np.mean(mdata, axis=0)*1e12, color)
+        ax.plot(tb, np.mean(mdata, axis=0)*self.scale_factor, color, rasterized=self.rasterize)
         ax.set_xlim([0., 0.6])
         if self.sign < 0:
-            ax.set_ylim([-100., 20.])
+            if self.datatype == 'I':
+                ax.set_ylim([-20., 20.]) # IPSP negative, CC
+            else:  # 'V'
+                ax.set_ylim([-100., 20.])  # EPSC, negative, VC
         else:
-            ax.set_ylim([-20., 100.])
+            if self.datatype == 'I':
+                ax.set_ylim([-20., 20.])  # EPSC, positive, current clamp
+            else: # 'V'
+                ax.set_ylim([-20., 100.])  # IPSC, positive, VC
+                
 
     def clip_colors(self, cmap, clipcolor):
         cmax = len(cmap)
@@ -418,19 +429,27 @@ class AnalyzeMap(object):
         return cmap
 
     def plot_map(self, axp, axcbar, pos, measure, vmaxin=None, 
-            imageHandle=None, angle=0, spotsize=20e-6, cellmarker=False):
+            imageHandle=None, imagefile=None, angle=0, spotsize=20e-6, cellmarker=False):
 
         sf = 1.0 # could be 1e-6 ? data in Meters? scale to mm. 
         cmrk = 50e-6*sf # size, microns
-        for n in range(pos.shape[0]):
-            if pos[n,0] == 0. and pos[n,1] == 0:
-                break
+#        print('p shape: ', pos.shape)
+        if pos.shape[0] > 1:
+            for n in range(pos.shape[0]):
+                if pos[n,0] == 0. and pos[n,1] == 0:
+                    break
+        else:
+             n = 1
+#        print('pos: ', pos, n)
+        
         pos = pos[:n,:] *1e3 # clip unused positions   
+#        print('pos: ', pos)
+        
         pz = [np.mean(pos[:,0]), np.mean(pos[:,1])]
   #      pos[:,0] = pos[:,0]-pz[0]
    #     pos[:,1] = pos[:,1]-pz[1]
             
-        if imageHandle is not None:
+        if imageHandle is not None and imagefile is not None:
             imageInfo = imageHandle.imagemetadata[0]
             # compute the extent for the image, offsetting it to the map center position
             ext_left = imageInfo['deviceTransform']['pos'][0]*1e3 # - pz[0]
@@ -454,10 +473,12 @@ class AnalyzeMap(object):
         # exit(1)
         vmin = 0.
         # adjust vmax's to use rational values. 
+#        print('vmaxin', vmaxin)
         if vmaxin is not None:
             vmax = vmaxin
         else:
             vmax = np.max(measure)
+#        print('vmax0: ', vmax)
         scaler = PH.NiceScale(0, vmax)
         vmax = scaler.niceMax
         spotsize = 1e3*spotsize
@@ -469,7 +490,7 @@ class AnalyzeMap(object):
         radw = np.ones(pos.shape[0])*spotsize
         radh = np.ones(pos.shape[0])*spotsize
         cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
-        print('vmax: ', vmax)
+#        print('vmax: ', vmax)
         colors = cmx.to_rgba(np.clip(measure/vmax, 0., 1.))
         colors = self.clip_colors(colors, [1., 1., 1., 1.])
         ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
@@ -480,6 +501,7 @@ class AnalyzeMap(object):
             axp.plot([0., 0.], [-cmrk, cmrk], '-', color='r') # cell centered coorinates
 
         tickspace = scaler.tickSpacing
+#        print('vmax, tickspace: ', vmax, tickspace)
         ntick = 1 + int(vmax/tickspace)
         ticks = np.linspace(0, vmax, num=ntick, endpoint=True)
         if axcbar is not None:
@@ -488,20 +510,21 @@ class AnalyzeMap(object):
             c2.ax.tick_params(axis='y', direction='out')
        # axp.scatter(pos[:,0], pos[:,1], s=2, marker='.', color='k', zorder=4)
         axr = 250.
-        # axp.set_xlim(xlim)
-        # axp.set_ylim(ylim)
+        axp.set_xlim(xlim)
+        axp.set_ylim(ylim)
         axp.set_aspect('equal')
         if vmaxin is None:
             return vmax
         else:
             return vmaxin
 
-    def display_one_map(self, dataset, imagefile=None, rotation=0.0, measuretype=None):
+    def display_one_map(self, dataset, imagefile=None, rotation=0.0, measuretype=None, 
+            plotevents=True):
         self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
-        print('read from raw file')
+        #print('read from raw file')
         # if writepickle:  # save the data off... moving sequences to nparrays seemed to solve a pickle problem...
         #     pdata[protocolfilename] = {'data': data, 'tb': tb, 'info': info ,
-        #         'sequence1': np.array(pars['sequence1']['d']),
+        #         'sequence1': np.array(pars['s gequence1']['d']),
         #         'sequence2': np.array(pars['sequence2']['index']),
         #     }
         #     continue
@@ -560,14 +583,14 @@ class AnalyzeMap(object):
         if self.overlay_scale > 0.:
             self.newvmax = self.overlay_scale
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], results[measuretype], 
-            vmaxin=self.newvmax, imageHandle=self.MT, angle=rotation, spotsize=self.AR.spotsize)
-        print(results['events'].keys())
+            vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
+#        print(results['events'].keys())
         self.plot_all_traces(self.tb, self.data, dataset, events=results['events'], ax=self.P.axdict['D'])
     # if writepickle:
     #     save_pickled(cell+'.p', pdata)
 
         # if not writepickle:
-        mpl.show()
+        #     mpl.show()
     
  
 if __name__ == '__main__':
