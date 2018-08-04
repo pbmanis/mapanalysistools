@@ -62,8 +62,8 @@ basedir = "/Users/pbmanis/Desktop/Python/mapAnalysisTools"
 re_degree = re.compile('\s*(\d{1,3}d)\s*')
 re_duration = re.compile('(\d{1,3}ms)')
 
-print ('maps: ', colormaps)
-print(dir(colormaps))
+# print ('maps: ', colormaps)
+# print(dir(colormaps))
 def setMapColors(colormapname, reverse=False):
     from mapanalysistools import colormaps
     if colormapname == 'terrain':
@@ -122,8 +122,10 @@ class AnalyzeMap(object):
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
         self.AR.setProtocol(protocolFilename)
-        self.AR.getData()
-        print('protocol: ', protocolFilename)
+        if not self.AR.getData():
+            print('no data found in file: %s' % protocolFilename)
+            return None, None, None, None
+        print('Protocol: ', protocolFilename)
         self.stimtimes = self.AR.getBlueLaserTimes()
         if self.stimtimes is not None:
             self.twin_base = [0., self.stimtimes['start'][0] - 0.001]  # remember times are in seconds
@@ -352,6 +354,8 @@ class AnalyzeMap(object):
         protodata = {}
         nmax = 1000
         data, tb, pars, info = self.readProtocol(filename, sparsity=None)
+        if data is None:
+            return (None)
         results = self.analyze_protocol(data, tb, info, LPF=LPF, eventhist=True)
         plot_all_traces(tb, data, title=filename, events=results['events'])
         return(results)
@@ -521,14 +525,9 @@ class AnalyzeMap(object):
     def display_one_map(self, dataset, imagefile=None, rotation=0.0, measuretype=None, 
             plotevents=True):
         self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
-        #print('read from raw file')
-        # if writepickle:  # save the data off... moving sequences to nparrays seemed to solve a pickle problem...
-        #     pdata[protocolfilename] = {'data': data, 'tb': tb, 'info': info ,
-        #         'sequence1': np.array(pars['s gequence1']['d']),
-        #         'sequence2': np.array(pars['sequence2']['index']),
-        #     }
-        #     continue
-        
+        if self.data is None:   # check that we were able to retrieve data
+            return False
+
         results = self.analyze_protocol(self.data, self.tb, info, eventhist=plotevents)
 
         # build a figure
@@ -540,18 +539,7 @@ class AnalyzeMap(object):
         imgh = 0.25
         trs = imgh - trh  # 2nd trace position (offset from top of image box)
         y = 0.08 + np.arange(0., 0.7, imgw+0.05)  # y positions 
-        self.mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}
-        # self.plotspecs = OrderedDict([('A', {'pos': [l_c1, imgw, y[2], imgh]}),
-        #                          ('B', {'pos': [l_c2, trw, y[2]+trs, trh]}),
-        #                          ('C', {'pos': [l_c2, trw, y[2], trh]}),
-        #                          ('D', {'pos': [l_c1, imgw, y[1], imgh]}),
-        #                          ('E', {'pos': [l_c2, trw, y[1]+trs, trh]}),
-        #                          ('F', {'pos': [l_c2, trw, y[1], trh]}),
-        #                          ('G', {'pos': [l_c1, imgw, y[0], imgh]}),
-        #                          ('H', {'pos': [l_c2, trw, y[0]+trs, trh]}),
-        #                          ('I', {'pos': [l_c2, trw, y[0], trh]}),
-        #                          ('A1', {'pos': [l_c1+imgw+0.01, 0.012, y[2], imgh]})])
-        
+        self.mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}        
         self.plotspecs = OrderedDict([('A', {'pos': [0.1, 0.4, 0.5, 0.4]}),
                                  ('B', {'pos': [0.65, 0.3, 0.65, 0.25]}),
                                  ('C', {'pos': [0.65, 0.3, 0.35, 0.25]}),
@@ -584,14 +572,9 @@ class AnalyzeMap(object):
             self.newvmax = self.overlay_scale
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], results[measuretype], 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
-#        print(results['events'].keys())
         self.plot_all_traces(self.tb, self.data, dataset, events=results['events'], ax=self.P.axdict['D'])
-    # if writepickle:
-    #     save_pickled(cell+'.p', pdata)
-
-        # if not writepickle:
-        #     mpl.show()
-    
+        return True # indicated that we indeed plotted traces.
+        
  
 if __name__ == '__main__':
     datadir = '/Volumes/PBM_004/data/MRK/Pyramidal'
