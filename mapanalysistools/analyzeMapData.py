@@ -505,6 +505,7 @@ class AnalyzeMap(object):
         #         'sequence2': np.array(pars['sequence2']['index']),
         #     }
         #     continue
+        
         results = self.analyze_protocol(self.data, self.tb, info, eventhist=plotevents)
 
         # build a figure
