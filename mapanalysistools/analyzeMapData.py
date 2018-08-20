@@ -2,7 +2,7 @@ from __future__ import print_function
 from __future__ import absolute_import
 """
 
-This code was build to process the TTX experimetns with maps directly from the data, but
+This code was originally built to process the TTX experiments with maps directly from the data, but
 may be otherwise useful...
 
 Add this to your .bash_profile
@@ -107,17 +107,17 @@ class AnalyzeMap(object):
         self.MT = MONT.montager.Montager()
         self.response_window = 0.030  # seconds
         self.direct_window = 0.001
+        # set some defaults - these will be overwrittein with readProtocol
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
         self.taus = [0.5, 2.0]
         self.threshold = 4.0
         self.sign = -1  # negative for EPSC, positive for IPSC
-        self.scale_factor = 1. # scale factore for data (convert to pA or mV,,, )
+        self.scale_factor = 1 # scale factore for data (convert to pA or mV,,, )
         self.overlay_scale = 0.
         self.stepi = 20.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
         self.rasterize = rasterize
-        
         
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
@@ -157,32 +157,32 @@ class AnalyzeMap(object):
     def set_analysis_windows(self):
         pass
 
-    def calculate_charge(self, tb, data):
+    def calculate_charge(self, tb, data, twin_base=[0, 0.1], twin_resp=[[0.101, 0.130]]):
         """
         One-dimensional data...
         """
         # get indices for the integration windows
-        tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
-        trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
-        Qr = 1e6*np.sum(data[trindx])/(self.twin_resp[0][1]-self.twin_resp[0][0]) # response
-        Qb = 1e6*np.sum(data[tbindx])/(self.twin_base[1]-self.twin_base[0])  # baseline
+        tbindx = np.where((tb >= twin_base[0]) & (tb < twin_base[1]))
+        trindx = np.where((tb >= twin_resp[0]) & (tb < twin_resp[1]))
+        Qr = 1e6*np.sum(data[trindx])/(twin_resp[1]-twin_resp[0]) # response
+        Qb = 1e6*np.sum(data[tbindx])/(twin_base[1]-twin_base[0])  # baseline
         return Qr, Qb
 
-    def ZScore(self, tb, data, tbase=[0., 0.1], ):
+    def ZScore(self, tb, data, twin_base=[0, 0.1], twin_resp=[[0.101, 0.130]]):
         # abs(post.mean() - pre.mean()) / pre.std()
         # get indices for the integration windows
-        tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
-        trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
-        #print('max tb: ', np.max(tb), 'base: ', self.twin_base, 'resp: ', self.twin_resp)
+        tbindx = np.where((tb >= twin_base[0]) & (tb < twin_base[1]))
+        trindx = np.where((tb >= twin_resp[0]) & (tb < twin_resp[1]))
+        #print('max tb: ', np.max(tb), 'base: ', twin_base, 'resp: ', twin_resp)
         #print(trindx, tbindx)
         mpost = np.mean(data[trindx]) # response
         mpre = np.mean(data[tbindx])  # baseline
         return(np.fabs((mpost-mpre)/np.std(data[tbindx])))
 
-    def Imax(self, tb, data, sign=1):
+    def Imax(self, tb, data, twin_base=[0, 0.1], twin_resp=[[0.101, 0.130]], sign=1):
 
-        tbindx = np.where((tb >= self.twin_base[0]) & (tb < self.twin_base[1]))
-        trindx = np.where((tb >= self.twin_resp[0][0]) & (tb < self.twin_resp[0][1]))
+        tbindx = np.where((tb >= twin_base[0]) & (tb < twin_base[1]))
+        trindx = np.where((tb >= twin_resp[0]) & (tb < twin_resp[1]))
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
@@ -203,15 +203,19 @@ class AnalyzeMap(object):
         mdata = np.mean(data, axis=0)  # mean across ALL reps
         rate = rate*1e3  # convert rate to msec
         # make visual maps
-        Qr = np.zeros(data.shape[1])
-        Qb = np.zeros(data.shape[1])
-        Zscore = np.zeros(data.shape[1])
-        I_max = np.zeros(data.shape[1])
+        nstim = len(self.twin_resp)
+        self.nstim = nstim
+        Qr = np.zeros((nstim, data.shape[1]))
+        Qb = np.zeros((nstim, data.shape[1]))
+        Zscore = np.zeros((nstim, data.shape[1]))
+        I_max = np.zeros((nstim, data.shape[1]))
         pos = np.zeros((data.shape[1], 2))
         for t in range(data.shape[1]):  # compute for each target
-            Qr[t], Qb[t] = self.calculate_charge(tb, mdata[t,:])
-            Zscore[t] = self.ZScore(tb, mdata[t,:])
-            I_max[t] = self.Imax(tb, data[0,t,:], sign=self.sign)*self.scale_factor  # just the FIRST pass
+            for s in range(len(self.twin_resp)): # and for each stimulus
+                Qr[s, t], Qb[s, t] = self.calculate_charge(tb, mdata[t,:], twin_base=self.twin_base, twin_resp=self.twin_resp[s])
+                Zscore[s, t] = self.ZScore(tb, mdata[t,:], twin_base=self.twin_base, twin_resp=self.twin_resp[s])
+                I_max[s, t] = self.Imax(tb, data[0,t,:], twin_base=self.twin_base, twin_resp=self.twin_resp[s],
+                                sign=self.sign)*self.scale_factor  # just the FIRST pass
             try:
                 pos[t,:] = [info[(0,t)]['pos'][0], info[(0,t)]['pos'][1]]
             except:
@@ -220,6 +224,7 @@ class AnalyzeMap(object):
         events = {}
         eventlist = []  # event histogram across ALL events/trials
         nevents = 0
+        print('sign: ', self.sign)
         if eventhist:
             v = [-1.0, 0., self.taus[0], self.taus[1]]
             x = np.linspace(0., self.taus[1]*5, int(50./rate))
@@ -349,16 +354,16 @@ class AnalyzeMap(object):
         fn.close()
         return(data)
 
-    def analyze_file(self, filename, dhImage=None, plotFlag=False, 
-            LPF=5000.):
-        protodata = {}
-        nmax = 1000
-        data, tb, pars, info = self.readProtocol(filename, sparsity=None)
-        if data is None:
-            return (None)
-        results = self.analyze_protocol(data, tb, info, LPF=LPF, eventhist=True)
-        plot_all_traces(tb, data, title=filename, events=results['events'])
-        return(results)
+    # def analyze_file(self, filename, dhImage=None, plotFlag=False,
+    #         LPF=5000.):
+    #     protodata = {}
+    #     nmax = 1000
+    #     data, tb, pars, info = self.readProtocol(filename, sparsity=None)
+    #     if data is None:
+    #         return (None)
+    #     results = self.analyze_protocol(data, tb, info, LPF=LPF, eventhist=True)
+    #     plot_all_traces(tb, data, title=filename, events=results['events'])
+    #     return(results)
 
     def plot_timemarker(self, ax):
         """
@@ -441,6 +446,7 @@ class AnalyzeMap(object):
         if pos.shape[0] > 1:
             for n in range(pos.shape[0]):
                 if pos[n,0] == 0. and pos[n,1] == 0:
+                    print('Empty position')
                     break
         else:
              n = 1
@@ -473,39 +479,38 @@ class AnalyzeMap(object):
                     reshape=True, output=None, order=3, mode='constant', cval=0.0, prefilter=True)
 #            axp.imshow(img, extent=extents, aspect='auto', origin='lower')
             axp.imshow(img, aspect='equal', extent=extents, origin='lower', cmap=setMapColors('gray'))
-        # mpl.show()
-        # exit(1)
-        vmin = 0.
-        # adjust vmax's to use rational values. 
-#        print('vmaxin', vmaxin)
-        if vmaxin is not None:
-            vmax = vmaxin
-        else:
-            vmax = np.max(measure)
-#        print('vmax0: ', vmax)
-        scaler = PH.NiceScale(0, vmax)
-        vmax = scaler.niceMax
+
         spotsize = 1e3*spotsize
+        spotsizes = spotsize*np.linspace(1.0, 0.2, len(measure))
         pos = self.scale_and_rotate(pos, scale=1.0, angle=angle)
         xlim = [np.min(pos[:,0])-spotsize, np.max(pos[:,0])+spotsize]
         ylim = [np.min(pos[:,1])-spotsize, np.max(pos[:,1])+spotsize]
-        # note circle size is radius, and is set by the laser spotsize (which is diameter)
-        spotsize = spotsize
-        radw = np.ones(pos.shape[0])*spotsize
-        radh = np.ones(pos.shape[0])*spotsize
-        cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
-#        print('vmax: ', vmax)
-        colors = cmx.to_rgba(np.clip(measure/vmax, 0., 1.))
-        colors = self.clip_colors(colors, [1., 1., 1., 1.])
-        ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
-                    facecolor=colors, edgecolor='k', alpha=0.75)
-        axp.add_collection(ec)
+        # if vmaxin is not None:
+        #     vmax = vmaxin  # fixed
+        # else:
+        vmax = np.max(np.max(measure))
+        vmin = np.min(np.min(measure))
+        print('vmax: ', vmin, vmax)
+        scaler = PH.NiceScale(0, vmax)
+        vmax = scaler.niceMax
+        print('vmax res: ', vmax)
+        
+        for im in range(len(measure)):  # there may be multiple measures (repeated stimuli of different kinds) in a map
+            # note circle size is radius, and is set by the laser spotsize (which is diameter)
+            radw = np.ones(pos.shape[0])*spotsizes[im]
+            radh = np.ones(pos.shape[0])*spotsizes[im]
+            cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
+            colors = cmx.to_rgba(np.clip(measure[im]/vmax, 0., 1.))
+            colors = self.clip_colors(colors, [1., 1., 1., 1.])
+            ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
+                        facecolor=colors, edgecolor='k', linewidth=0.2, alpha=1.0)
+            axp.add_collection(ec)
+        
         if cellmarker:
             axp.plot([-cmrk, cmrk], [0., 0.], '-', color='r') # cell centered coorinates
             axp.plot([0., 0.], [-cmrk, cmrk], '-', color='r') # cell centered coorinates
 
         tickspace = scaler.tickSpacing
-#        print('vmax, tickspace: ', vmax, tickspace)
         ntick = 1 + int(vmax/tickspace)
         ticks = np.linspace(0, vmax, num=ntick, endpoint=True)
         if axcbar is not None:
@@ -516,7 +521,8 @@ class AnalyzeMap(object):
         axr = 250.
         axp.set_xlim(xlim)
         axp.set_ylim(ylim)
-        axp.set_aspect('equal')
+        if imageHandle is not None and imagefile is not None:
+            axp.set_aspect('equal')
         if vmaxin is None:
             return vmax
         else:
@@ -550,14 +556,12 @@ class AnalyzeMap(object):
         self.P = PH.Plotter(self.plotspecs, label=False, figsize=(10., 8.))
 
         self.plot_events(self.P.axdict['B'], self.P.axdict['C'], results)
-        
         if imagefile is not None:
             self.MT.get_image(imagefile)
             self.MT.load_images()
             # print (self.MT.imagemetadata)
             # self.MT.show_images()
             # exit(1)
-            
         ident = 0
         if ident == 0:
             cbar = self.P.axdict['A1']
@@ -573,6 +577,7 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], results[measuretype], 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
         self.plot_all_traces(self.tb, self.data, dataset, events=results['events'], ax=self.P.axdict['D'])
+        mpl.show()
         return True # indicated that we indeed plotted traces.
         
  
