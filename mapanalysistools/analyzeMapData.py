@@ -15,6 +15,16 @@ For example:
 import sys
 import sqlite3
 import matplotlib
+matplotlib.use('Agg')
+rcParams = matplotlib.rcParams
+rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
+rcParams['pdf.fonttype'] = 42
+rcParams['ps.fonttype'] = 42
+rcParams['text.latex.unicode'] = True
+rcParams['font.family'] = 'sans-serif'
+rcParams['font.weight'] = 'regular'                  # you can omit this, it's the default
+rcParams['font.sans-serif'] = ['Arial']
+
 import pyqtgraph.multiprocess as mp
 
 import argparse
@@ -32,15 +42,6 @@ import timeit
 import ephysanalysis as EP
 import montage as MONT
 
-import matplotlib
-rcParams = matplotlib.rcParams
-rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
-rcParams['pdf.fonttype'] = 42
-rcParams['ps.fonttype'] = 42
-rcParams['text.latex.unicode'] = True
-rcParams['font.family'] = 'sans-serif'
-rcParams['font.weight'] = 'regular'                  # you can omit this, it's the default
-rcParams['font.sans-serif'] = ['Arial']
 #from pyqtgraph.metaarray import MetaArray
 
 from mapanalysistools import functions
@@ -105,13 +106,15 @@ class AnalyzeMap(object):
         self.SP = EP.SpikeAnalysis.SpikeAnalysis()
         self.RM = EP.RmTauAnalysis.RmTauAnalysis()
         self.MT = MONT.montager.Montager()
+        self.lbr_command = False  # laser blue raw waveform (command)
+        self.photodiode = False  # photodiode waveform (recorded)
         self.response_window = 0.030  # seconds
         self.direct_window = 0.001
         # set some defaults - these will be overwrittein with readProtocol
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
         self.taus = [0.5, 2.0]
-        self.threshold = 4.0
+        self.threshold = 3.0
         self.sign = -1  # negative for EPSC, positive for IPSC
         self.scale_factor = 1 # scale factore for data (convert to pA or mV,,, )
         self.overlay_scale = 0.
@@ -132,7 +135,11 @@ class AnalyzeMap(object):
             self.twin_resp = []
             for j in range(len(self.stimtimes['start'])):
                 self.twin_resp.append([self.stimtimes['start'][j]+self.direct_window, self.stimtimes['start'][j]+self.response_window])
+        self.lbr_command = self.AR.getLaserBlueCommand() # just get flag; data in self.AR
+        self.photodiode = self.AR.getPhotodiode()
+        self.shutter = self.AR.getDeviceData('Laser-Blue-raw', 'Shutter')
         self.AR.getScannerPositions()
+        
         data = np.reshape(self.AR.traces, (self.AR.repetitions, self.AR.traces.shape[0], self.AR.traces.shape[1]))
         endtime = timeit.default_timer()
         print("Time to read data: %f s" % (endtime-starttime))
@@ -172,12 +179,15 @@ class AnalyzeMap(object):
         # abs(post.mean() - pre.mean()) / pre.std()
         # get indices for the integration windows
         tbindx = np.where((tb >= twin_base[0]) & (tb < twin_base[1]))
+        
         trindx = np.where((tb >= twin_resp[0]) & (tb < twin_resp[1]))
-        #print('max tb: ', np.max(tb), 'base: ', twin_base, 'resp: ', twin_resp)
-        #print(trindx, tbindx)
         mpost = np.mean(data[trindx]) # response
         mpre = np.mean(data[tbindx])  # baseline
-        return(np.fabs((mpost-mpre)/np.std(data[tbindx])))
+        try:
+            zs = np.fabs((mpost-mpre)/np.std(data[tbindx]))
+        except:
+            zs = 0
+        return zs
 
     def Imax(self, tb, data, twin_base=[0, 0.1], twin_resp=[[0.101, 0.130]], sign=1):
 
@@ -224,7 +234,7 @@ class AnalyzeMap(object):
         events = {}
         eventlist = []  # event histogram across ALL events/trials
         nevents = 0
-        print('sign: ', self.sign)
+        # print('sign: ', self.sign)
         if eventhist:
             v = [-1.0, 0., self.taus[0], self.taus[1]]
             x = np.linspace(0., self.taus[1]*5, int(50./rate))
@@ -378,7 +388,7 @@ class AnalyzeMap(object):
 #            print('t: ', t)
             ax.plot([t, t], yl, 'b-', linewidth=0.5, alpha=0.6, rasterized=self.rasterize)
 
-    def plot_events(self, axh, axt, results, colorid=0):
+    def plot_events(self, axh, results, colorid=0):
         """
         Plot the events (average) and the histogram of event times
         hist goes into axh
@@ -389,8 +399,7 @@ class AnalyzeMap(object):
         plotFlag = True
         idn = 0
         self.newvmax = None 
-
-        self.plot_traces(axt, self.tb, np.mean(self.data, axis=0), color=color_sequence[colorid])
+        
         if plotevents and len(results['eventtimes']) > 0:
             y=[]
             for x in range(len(results['eventtimes'])):
@@ -400,7 +409,7 @@ class AnalyzeMap(object):
             self.plot_timemarker(axh)
             axh.set_xlim([0., 0.6])
 
-    def plot_all_traces(self, tb, mdata, title, events=None, ax=None):
+    def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None):
         if ax is None:
             f, ax = mpl.subplots(1,1)
         for i in range(mdata.shape[1]):
@@ -414,9 +423,13 @@ class AnalyzeMap(object):
         self.plot_timemarker(ax)
         ax.set_xlim(0, 0.599)
 
-    def plot_traces(self, ax, tb, mdata, color='k'):
-        ax.plot(tb, np.mean(mdata, axis=0)*self.scale_factor, color, rasterized=self.rasterize)
+    def plot_average_traces(self, ax, tb, mdata, color='k'):
+        while mdata.ndim > 1:
+            mdata = mdata.mean(axis=0)
+        #print('average mdata.shape: ', mdata.shape, tb.shape, self.scale_factor, np.max(mdata*self.scale_factor), np.min(mdata*self.scale_factor))
+        ax.plot(tb, mdata*self.scale_factor, color, rasterized=self.rasterize)
         ax.set_xlim([0., 0.6])
+        return
         if self.sign < 0:
             if self.datatype == 'I':
                 ax.set_ylim([-20., 20.]) # IPSP negative, CC
@@ -437,7 +450,11 @@ class AnalyzeMap(object):
                 cmap[i] = clipcolor
         return cmap
 
-    def plot_map(self, axp, axcbar, pos, measure, vmaxin=None, 
+    def plot_photodiode(self, ax, tb, pddata, color='k'):
+        ax.plot(tb, np.mean(pddata, axis=0), color, rasterized=self.rasterize)
+        ax.set_xlim([0., 0.6])
+        
+    def plot_map(self, axp, axcbar, pos, measure, measuretype='I_max', vmaxin=None, 
             imageHandle=None, imagefile=None, angle=0, spotsize=20e-6, cellmarker=False):
 
         sf = 1.0 # could be 1e-6 ? data in Meters? scale to mm. 
@@ -446,7 +463,7 @@ class AnalyzeMap(object):
         if pos.shape[0] > 1:
             for n in range(pos.shape[0]):
                 if pos[n,0] == 0. and pos[n,1] == 0:
-                    print('Empty position')
+                   # print('Empty position')
                     break
         else:
              n = 1
@@ -481,37 +498,41 @@ class AnalyzeMap(object):
             axp.imshow(img, aspect='equal', extent=extents, origin='lower', cmap=setMapColors('gray'))
 
         spotsize = 1e3*spotsize
-        spotsizes = spotsize*np.linspace(1.0, 0.2, len(measure))
+        spotsizes = spotsize*np.linspace(1.0, 0.2, len(measure[measuretype]))
         pos = self.scale_and_rotate(pos, scale=1.0, angle=angle)
         xlim = [np.min(pos[:,0])-spotsize, np.max(pos[:,0])+spotsize]
         ylim = [np.min(pos[:,1])-spotsize, np.max(pos[:,1])+spotsize]
         # if vmaxin is not None:
         #     vmax = vmaxin  # fixed
         # else:
-        vmax = np.max(np.max(measure))
-        vmin = np.min(np.min(measure))
-        print('vmax: ', vmin, vmax)
+        vmax = np.max(np.max(measure[measuretype]))
+        vmin = np.min(np.min(measure[measuretype]))
+        # print('vmax: ', vmin, vmax)
         scaler = PH.NiceScale(0, vmax)
         vmax = scaler.niceMax
-        print('vmax res: ', vmax)
+        # print('vmax res: ', vmax)
         
-        for im in range(len(measure)):  # there may be multiple measures (repeated stimuli of different kinds) in a map
+        for im in range(len(measure[measuretype])):  # there may be multiple measure[measuretype]s (repeated stimuli of different kinds) in a map
             # note circle size is radius, and is set by the laser spotsize (which is diameter)
             radw = np.ones(pos.shape[0])*spotsizes[im]
             radh = np.ones(pos.shape[0])*spotsizes[im]
             cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
-            colors = cmx.to_rgba(np.clip(measure[im]/vmax, 0., 1.))
-            colors = self.clip_colors(colors, [1., 1., 1., 1.])
+            colors = cmx.to_rgba(np.clip(measure[measuretype][im]/vmax, 0., 1.))
+         #   colors = self.clip_colors(colors, [1., 1., 1., 1.])
             ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
                         facecolor=colors, edgecolor='k', linewidth=0.2, alpha=1.0)
             axp.add_collection(ec)
-        
+
         if cellmarker:
+            print('Cell marker')
             axp.plot([-cmrk, cmrk], [0., 0.], '-', color='r') # cell centered coorinates
             axp.plot([0., 0.], [-cmrk, cmrk], '-', color='r') # cell centered coorinates
 
         tickspace = scaler.tickSpacing
-        ntick = 1 + int(vmax/tickspace)
+        try:
+            ntick = 1 + int(vmax/tickspace)
+        except:
+            ntick = 3
         ticks = np.linspace(0, vmax, num=ntick, endpoint=True)
         if axcbar is not None:
             norm = matplotlib.colors.Normalize(vmin=0, vmax=vmax)
@@ -523,19 +544,61 @@ class AnalyzeMap(object):
         axp.set_ylim(ylim)
         if imageHandle is not None and imagefile is not None:
             axp.set_aspect('equal')
+        axp.set_aspect('equal')
+        axp.set_title(measuretype)
         if vmaxin is None:
             return vmax
         else:
             return vmaxin
+
+    def fix_pd_artifact(self, data):
+        """
+        Hand tuned to minimize the transient and DC step from the PD signal - still leaves a bit of a fast
+        transient (obviously the filter shape is not quite correct)
+        The algorithm is simple:
+            1. average all the PD data to reduce nose
+            2. calculate a high-pass filtered version of the PD signal to emulate the capacitative cross-talk
+            3. add (or subtract) a small amount of the PD signal to emulate the DC part of the cross-talk
+            4. subtract it from the data
+        """
+        # meanpddata = self.AR.Photodiode.mean(axis=0)  # get the average PD signal that was recorded
+        # if meanpddata is not None:
+        #     Util = EP.Utility.Utility()
+        #     crosstalk = 0.365e-9*Util.SignalFilter_HPFBessel(meanpddata, 1900., self.AR.Photodiode_sample_rate[0], NPole=2, bidir=False)
+        #     # crosstalk -= 0.06e-9*meanpddata
+        #     crosstalk -= 0.1e-9*meanpddata
+        #     crosstalk = np.hstack((np.zeros(2), crosstalk[:-2]))
+        # if self.shutter is not None:
+        #     crossshutter = 0* 0.365e-21*Util.SignalFilter_HPFBessel(self.shutter['data'][0], 1900., self.AR.Photodiode_sample_rate[0], NPole=2, bidir=False)
+        #     crosstalk += crossshutter
+        avd = data.copy()
+        while avd.ndim > 1:
+            avd = np.mean(avd, axis=0)
+#        print('avdata shape: ', avd.shape)
+        datar = np.zeros_like(data)
+        for i in range(data.shape[0]):
+            datar[i,:] = data[i,:] - avd
+#        print('dmax: ', np.max(np.max(datar)))
+#        print('dmin: ', np.min(np.min(datar)))
+        return(datar, avd)
 
     def display_one_map(self, dataset, imagefile=None, rotation=0.0, measuretype=None, 
             plotevents=True):
         self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
         if self.data is None:   # check that we were able to retrieve data
             return False
-
-        results = self.analyze_protocol(self.data, self.tb, info, eventhist=plotevents)
-
+        self.data_clean, self.avgdata = self.fix_pd_artifact(self.data)
+        results = self.analyze_protocol(self.data_clean, self.tb, info, eventhist=plotevents)
+        # f, ax = mpl.subplots(2,2)
+#         ax = ax.ravel()
+#         for k, s in enumerate(['I_max', 'ZScore', 'Qr', 'Qb']):
+#             for i in results[s]:
+#                 ax[k].scatter(np.arange(len(i)), i, s=5)
+#                 ax[k].set_title(s)
+#             if s in ['Qb', 'Qr']:
+#                 ax[k].set_ylim(-0.20, np.max(i))
+#         mpl.show()
+        
         # build a figure
         l_c1 = 0.1  # column 1 position
         l_c2 = 0.50 # column 2 position
@@ -546,22 +609,25 @@ class AnalyzeMap(object):
         trs = imgh - trh  # 2nd trace position (offset from top of image box)
         y = 0.08 + np.arange(0., 0.7, imgw+0.05)  # y positions 
         self.mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}        
-        self.plotspecs = OrderedDict([('A', {'pos': [0.1, 0.4, 0.5, 0.4]}),
-                                 ('B', {'pos': [0.65, 0.3, 0.65, 0.25]}),
-                                 ('C', {'pos': [0.65, 0.3, 0.35, 0.25]}),
-                                 ('A1', {'pos': [0.5+0.01, 0.012, 0.5, 0.4]}),
-                                 ('D', {'pos': [0.1, 0.4, 0.07, 0.4]})
+        self.plotspecs = OrderedDict([('A', {'pos': [0.07, 0.3, 0.62, 0.3]}),
+                                 ('A1',{'pos': [0.37, 0.012, 0.62, 0.3]}), # scale bar
+                                 ('B', {'pos': [0.07, 0.3, 0.45, 0.15]}),
+                                 ('C', {'pos': [0.07, 0.3, 0.25, 0.15]}),
+                                 ('D', {'pos': [0.07, 0.3, 0.05, 0.15]}),
+                                 ('E', {'pos': [0.47, 0.45, 0.05, 0.85]}),
                                  ])  # a1 is cal bar
 
         self.P = PH.Plotter(self.plotspecs, label=False, figsize=(10., 8.))
 
-        self.plot_events(self.P.axdict['B'], self.P.axdict['C'], results)
+        self.plot_events(self.P.axdict['B'], results)
         if imagefile is not None:
             self.MT.get_image(imagefile)
             self.MT.load_images()
             # print (self.MT.imagemetadata)
             # self.MT.show_images()
             # exit(1)
+        self.plot_average_traces(self.P.axdict['C'], self.tb, self.data)
+        
         ident = 0
         if ident == 0:
             cbar = self.P.axdict['A1']
@@ -574,10 +640,12 @@ class AnalyzeMap(object):
         self.newvmax = np.max(results[measuretype])
         if self.overlay_scale > 0.:
             self.newvmax = self.overlay_scale
-        self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], results[measuretype], 
+        self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
-        self.plot_all_traces(self.tb, self.data, dataset, events=results['events'], ax=self.P.axdict['D'])
-        mpl.show()
+        self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])
+        if self.photodiode:
+            self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
+       # mpl.show()
         return True # indicated that we indeed plotted traces.
         
  
