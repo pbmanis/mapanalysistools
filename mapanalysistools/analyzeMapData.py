@@ -216,6 +216,11 @@ class AnalyzeMap(object):
             print('  >>No data found in protocol: %s' % protocolFilename)
             return None, None, None, None
         #print('Protocol: ', protocolFilename)
+        self.datatype = self.AR.mode[0].upper()  # get mode and simplify to I or V
+        if self.datatype == 'I':
+            self.stepi = 2.0
+        else:
+            self.stepi = 20.0
         self.stimtimes = self.AR.getBlueLaserTimes()
         if self.stimtimes is not None:
             self.twin_base = [0., self.stimtimes['start'][0] - 0.001]  # remember times are in seconds
@@ -504,7 +509,7 @@ class AnalyzeMap(object):
         for j in range(len(self.stimtimes['start'])):
             t = self.stimtimes['start'][j]
             if isinstance(t, float) and np.diff(yl) > 0: # check that plot is ok to try
-                ax.plot([t, t], yl, 'b-', linewidth=0.5, alpha=0.6, rasterized=False)  # self.rasterize
+                ax.plot([t, t], yl, 'b-', linewidth=0.5, alpha=0.6, rasterized=self.rasterize)
 
     def plot_events(self, axh, results, colorid=0):
         """
@@ -536,11 +541,11 @@ class AnalyzeMap(object):
             # print('max in bins: {0:.6f} '.format(np.max(bins)))
             # print('step: {0:.6f}'.format(np.mean(np.diff(bins))))
             axh.hist(y, bins=bins,
-                facecolor='k', edgecolor='k', linewidth=0.75, histtype='stepfilled', align='right')
+                facecolor='k', edgecolor='k', linewidth=0.5, histtype='stepfilled', align='right')
             self.plot_timemarker(axh)
             PH.nice_plot(axh, spines=['left', 'bottom'], position=-0.025, direction='outward', axesoff=False)
             axh.set_xlim(0., self.AR.tstart-0.001)
-            print('histograme event count: ', nevents, y.shape)
+#            print('histograme event count: ', nevents, y.shape)
 
     def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None):
         if ax is None:
@@ -548,17 +553,23 @@ class AnalyzeMap(object):
             self.figure_handle = f
         nevtimes = 0
         for i in range(mdata.shape[1]):
+#            print('stacked: tb, mdata shapes: ', tb.shape, mdata.shape)
             if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
-                ax.plot(tb, mdata[0, i,:]*self.scale_factor + self.stepi*i, linewidth=0.2,
-            rasterized=self.rasterize)
+                ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
+                        rasterized=self.rasterize, zorder=10)
             if events is not None:
                 nevtimes += len(events[0]['smpksindex'][i])
                 #print(events[i]['smpksindex'])
                 if len(tb[events[0]['smpksindex'][i]]) > 0 and len(mdata[0, i, events[0]['smpksindex'][i]]) > 0:
+#                    print('stacked2: tb, mdata shapes: ', tb[events[0]['smpksindex'][i]].shape, mdata[0, i,
+#                         events[0]['smpksindex'][i]].shape)
+                    # The following plot call causes problems if done rasterized. 
+                    # See: https://github.com/matplotlib/matplotlib/issues/12003
+                    # may be fixed in the future. For now, don't rasterize.
                     ax.plot(tb[events[0]['smpksindex'][i]], mdata[0, i, events[0]['smpksindex'][i]]*self.scale_factor + self.stepi*i,
-                     'ro', markersize=2, markeredgecolor=None, rasterized=self.rasterize)
+                     'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=False) # self.rasterize)
             
-        print('stacked trace event count: ', nevtimes)
+#        print('stacked trace event count: ', nevtimes)
         mpl.suptitle(str(title).replace('_', '\_'), fontsize=9)
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
@@ -583,20 +594,21 @@ class AnalyzeMap(object):
             return
         while mdata.ndim > 1:
             mdata = mdata.mean(axis=0)
+#        print('average traces: ', tb.shape, mdata.shape)
         if len(tb) > 0 and len(mdata) > 0:
-            ax.plot(tb, mdata*self.scale_factor, color, rasterized=False) # self.rasterize)
-        ax.set_xlim(0., self.AR.tstart)
+            ax.plot(tb, mdata*self.scale_factor, color, rasterized=self.rasterize, linewidth=0.6)
+        ax.set_xlim(0., self.AR.tstart-0.001)
         return
-        if self.sign < 0:
-            if self.datatype == 'I':
-                ax.set_ylim([-20., 20.]) # IPSP negative, CC
-            else:  # 'V'
-                ax.set_ylim([-100., 20.])  # EPSC, negative, VC
-        else:
-            if self.datatype == 'I':
-                ax.set_ylim([-20., 20.])  # EPSC, positive, current clamp
-            else: # 'V'
-                ax.set_ylim([-20., 100.])  # IPSC, positive, VC
+        # if self.sign < 0:
+        #     if self.datatype == 'I':
+        #         ax.set_ylim([-20., 20.]) # IPSP negative, CC
+        #     else:  # 'V'
+        #         ax.set_ylim([-100., 20.])  # EPSC, negative, VC
+        # else:
+        #     if self.datatype == 'I':
+        #         ax.set_ylim([-20., 20.])  # EPSC, positive, current clamp
+        #     else: # 'V'
+        #         ax.set_ylim([-20., 100.])  # IPSC, positive, VC
                 
 
     def clip_colors(self, cmap, clipcolor):
@@ -608,9 +620,10 @@ class AnalyzeMap(object):
         return cmap
 
     def plot_photodiode(self, ax, tb, pddata, color='k'):
+#        print('photodiode: ', tb.shape, np.mean(pddata, axis=0).shape)
         if len(tb) > 0 and len(np.mean(pddata, axis=0)) > 0:
-            ax.plot(tb, np.mean(pddata, axis=0), color, rasterized=False) # self.rasterize)
-        ax.set_xlim(0., self.AR.tstart)
+            ax.plot(tb, np.mean(pddata, axis=0), color, rasterized=self.rasterize, linewidth=0.6)
+        ax.set_xlim(0., self.AR.tstart-0.001)
         
     def plot_map(self, axp, axcbar, pos, measure, measuretype='I_max', vmaxin=None, 
             imageHandle=None, imagefile=None, angle=0, spotsize=20e-6, cellmarker=False):
