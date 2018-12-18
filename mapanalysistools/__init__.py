@@ -12,3 +12,4 @@ from . import analyzeMapData
 #from . import plotMapData  # removed - is an old unstructured version for source information
 from . import functions
 from . import colormaps
+from . import digital_filters

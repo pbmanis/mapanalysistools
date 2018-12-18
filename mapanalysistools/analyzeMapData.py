@@ -15,7 +15,7 @@ For example:
 import sys
 import sqlite3
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('MacOSX')
 rcParams = matplotlib.rcParams
 rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
 rcParams['pdf.fonttype'] = 42
@@ -29,6 +29,7 @@ import pyqtgraph.multiprocess as mp
 
 import argparse
 import numpy as np
+import numpy.ma as MA
 import scipy.signal
 import scipy.ndimage
 import os.path
@@ -45,6 +46,7 @@ import montage as MONT
 #from pyqtgraph.metaarray import MetaArray
 
 from mapanalysistools import functions
+import mapanalysistools.digital_filters as FILT
 from minis import minis_methods
 import matplotlib.pyplot as mpl
 import matplotlib.colors
@@ -189,23 +191,44 @@ class AnalyzeMap(object):
         self.MT = MONT.montager.Montager()
         self.last_dataset = None
         self.last_results = None
+        self.LPF = 3000.
+        self.notch = False
+        self.notch_freqs = [60.]
         self.lbr_command = False  # laser blue raw waveform (command)
         self.photodiode = False  # photodiode waveform (recorded)
+        self.fix_photodiode_artifact = True
         self.response_window = 0.030  # seconds
         self.direct_window = 0.001
         # set some defaults - these will be overwrittein with readProtocol
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
-        self.taus = [0.5, 2.0]
+       # self.taus = [0.5, 2.0]
+        self.taus = [0.2, 1.0]
         self.threshold = 3.0
         self.sign = -1  # negative for EPSC, positive for IPSC
         self.scale_factor = 1 # scale factore for data (convert to pA or mV,,, )
         self.overlay_scale = 0.
+        self.shutter_artifact = [0.055]
         self.stepi = 20.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
         self.rasterize = rasterize
         self.colors = {'red': '\x1b[31m', 'yellow': '\x1b[33m', 'green': '\x1b[32m', 'magenta': '\x1b[35m',
               'blue': '\x1b[34m', 'cyan': '\x1b[36m' , 'white': '\x1b[0m', 'backgray': '\x1b[100m'}
+
+    def set_notch(self, notch, freqs=[60]):
+        self.notch = notch
+        self.notch_freqs = freqs
+    
+    def set_LPF(self, LPF):
+        self.LPF = LPF
+
+    def set_taus(self, taus):
+        if len(taus) != 2:
+            raise ValueError('Analyze Map Data: need two tau values in list!, got: ', taus)
+        self.taus = sorted(taus)
+
+    def set_shutter_artifact_time(self, t):
+        self.shutter_artifact = t
 
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
@@ -231,7 +254,6 @@ class AnalyzeMap(object):
         self.photodiode = self.AR.getPhotodiode()
         self.shutter = self.AR.getDeviceData('Laser-Blue-raw', 'Shutter')
         self.AR.getScannerPositions()
-        
         data = np.reshape(self.AR.traces, (self.AR.repetitions, self.AR.traces.shape[0], self.AR.traces.shape[1]))
         endtime = timeit.default_timer()
         print("    Reading protocol {0:s} took {1:6.1f} s".format(protocolFilename.name, endtime-starttime))
@@ -289,7 +311,45 @@ class AnalyzeMap(object):
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
-    def analyze_protocol(self, data, tb, info, LPF=5000., eventstartthr=None, eventhist=True, testplots=False, 
+    def select_events(self, pkt, tstarts, twin, rate, mode='reject'):
+        """
+        return indices where the input index is outside a set of time windows.
+        tstarts is a list of window starts
+        twin is the duration of each window
+        rate is the data sample rate (in msec...)
+        pkt is the list of times to compare against.
+        """
+        # print('tstarts: ', tstarts)
+        # print('twin: ', twin)
+        # print('pkt: ', pkt)
+        # print('rate: ', rate)
+        if mode is 'reject':
+            npk = list(range(len(pkt)))
+        else:
+            npk = []
+        for k in range(len(pkt)):
+            for itw, tw in enumerate(tstarts): # and for each stimulus
+                if mode is 'reject' and npk[k] is None:
+                    continue
+                t0 = int(tw/(1e-3*rate))
+                te = t0 + int(twin/(1e-3*rate))
+#                print('to, te: ', t0, te)
+                # if i < 10:
+                if mode is 'reject':
+                    if pkt[k] >= t0 and pkt[k] <  te:
+                        npk[k] = None
+                elif mode is 'accept':
+                    if pkt[k] >= t0 and pkt[k] < te:
+                        if k not in npk:
+                            npk.append(k)
+                else:
+                    raise ValueError('analyzeMapData:select_times: mode must be accept or reject; got: ' % mode)
+#        print('npk: ', npk)
+#        print('\n')
+        npk = [nk for nk in npk if nk is not None]
+        return npk
+
+    def analyze_protocol(self, data, tb, info,  eventstartthr=None, eventhist=True, testplots=False, 
                 dataset=None, data_nostim=None):
         """
         data_nostim is a list of points where the stimulus/response DOES NOT occur, so we can compute the SD
@@ -300,16 +360,17 @@ class AnalyzeMap(object):
         use_AJ = True
         aj = minis_methods.AndradeJonas()
         cb = minis_methods.ClementsBekkers()
-        cutoff = 5000. # LPF at Hz
         filtfunc = scipy.signal.filtfilt
         rate = np.mean(np.diff(tb))  # t is in seconds, so freq is in Hz
         samplefreq = 1.0/rate
         nyquistfreq = samplefreq/1.95
-        wn = cutoff/nyquistfreq 
+        wn = self.LPF/nyquistfreq 
         b, a = scipy.signal.bessel(2, wn)
         for r in range(data.shape[0]):
             for t in range(data.shape[1]):
                 data[r,t,:] = filtfunc(b, a, data[r, t, :] - np.mean(data[r, t, 0:250]))
+                if self.notch:
+                    data[r,t,:] = FILT.NotchFilter(data[r, t, :], notchf=self.notch_freqs, Q=120., QScale=True, samplefreq=samplefreq)
         mdata = np.mean(data, axis=0)  # mean across ALL reps
         rate = rate*1e3  # convert rate to msec
         # make visual maps
@@ -346,6 +407,7 @@ class AnalyzeMap(object):
         
         #exit()
         nr = 0
+        # fign, axlr = mpl.subplots(1,1)
 
         key1=[]
         key2=[]
@@ -366,6 +428,8 @@ class AnalyzeMap(object):
             cbtemplate = functions.pspFunc(v, x, risePower=2.0).view(np.ndarray)
             tmaxev = 1000.*np.max(tb) # msec
             jmax = int(tmaxev/rate)
+            avgspont = []
+            avevoked = []
             for j in range(data.shape[0]):  # all trials
                 result = []
                 crit = []
@@ -384,14 +448,20 @@ class AnalyzeMap(object):
                         meandata = np.mean(idata[:jmax])
                         aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim, 
                                 thresh=self.threshold, llambda=10., order=7)
-                        # if len(aj.onsets) == 0:  # no events, so skip
-                        #     continue
-                        nevents += len(aj.onsets)
-                        result.append(aj.onsets)
-                        eventlist.append(tb[aj.onsets])
-                        tpks.append(aj.peaks)
-                        smpks.append(aj.smoothed_peaks)
-                        smpksindex.append(aj.smpkindex)
+
+                        # filter out events at times of stimulus artifacts
+                        pkt = aj.smpkindex.copy()
+                        npk1 = self.select_events(pkt, self.stimtimes['start'], 0.001, rate, mode='reject')
+                        npk2 = self.select_events(pkt, self.shutter_artifact, 0.001, rate, mode='reject')
+                        npk = list(set(npk1).intersection(set(npk2)))
+                        
+                        nevents += len(np.array(aj.onsets)[npk])
+                        result.append(np.array(aj.onsets)[npk])
+                        eventlist.append(tb[np.array(aj.onsets)[npk]])
+                        tpks.append(np.array(aj.peaks)[npk])
+                        smpks.append(np.array(aj.smoothed_peaks)[npk])
+                        smpksindex.append(np.array(aj.smpkindex)[npk])
+
                         if aj.averaged:
                             avgev.append(aj.avgevent)
                             avgtb.append(aj.avgeventtb)
@@ -400,6 +470,47 @@ class AnalyzeMap(object):
                             avgev.append([])
                             avgtb.append([])
                             avgnpts.append(0)
+                        
+                        # accumulate events sorted by spont or evoked.
+                        # define:
+                        # spont is not in evoked window, and no sooner than 10 msec before a stimulus,
+                        # at least 4*tau[0] after start of trace, and 5*tau[1] before end of trace
+                        # evoked is after the stimulus, in a window (usually ~ 5 msec)
+                        # data for events are aligned on the peak of the event, and go 4*tau[0] to 5*tau[1]
+                        evtimes = np.array(self.stimtimes['start'])+0.001
+                        ok_events = np.array(aj.smpkindex)[npk]
+#                        print('ok_events: ', ok_events)
+                        npk_ev = self.select_events(ok_events, evtimes, 0.005, rate, mode='accept')
+#                        print('npk_ev: ', npk_ev)
+                        # print(self.taus, rate)
+                        t0 = int(self.taus[0]*4.0/(rate))
+                        te = int(self.taus[1]*5.0/(rate))
+                        for iev, nev in enumerate(np.array(aj.smpkindex)[npk_ev]):
+                            # print(nev-t0, nev+te, (nev+te)-(nev-t0),)
+                            if nev+te > idata.shape[0]:
+                                continue
+                            dsel = idata[nev-t0:nev+te].copy()
+                            if iev == 0:
+                                ev_avg = dsel
+                            else:
+                                ev_avg += dsel
+                        if len(npk_ev) > 0:
+                            avevoked.append(ev_avg/iev)
+                        
+                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.taus[1]*5*1e-3), rate, mode='accept')
+#                        print('npk_sp: ', npk_sp)
+                        for isp, nsp in enumerate((np.array(aj.smpkindex)[npk_sp])):
+                            if nsp-t0 < 0 or nsp+te > idata.shape[0]:
+                                continue
+                            dsel = idata[nsp-t0:nsp+te].copy()
+                            if isp == 0:
+                                sp_avg = dsel
+                            else:
+                                sp_avg += dsel
+                        if len(npk_sp) > 0:
+                            avgspont.append(sp_avg/isp)
+                     #   print(i, ' spont spikes: ', isp)
+                        txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
                     
                         if testplots:
                             aj.plots(title='%d' % i, events=None)
@@ -423,8 +534,14 @@ class AnalyzeMap(object):
                                          cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
                             mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
-                    'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts}
+                    'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avevoked, 'avgspont': avgspont, 'aveventtb': txb}
         # print('analyze protocol returns, nevents = %d' % nevents)
+            # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
+            # if len(avevoked) > 0:
+            #     axlr.plot(txb, np.mean(avevoked, axis=0), 'r-')
+            # if len(avgspont) > 0:
+            #     axlr.plot(txb, np.mean(avgspont, axis=0), 'b-')
+            # mpl.show()
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
                'aj': aj, 'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset}
 
@@ -573,6 +690,34 @@ class AnalyzeMap(object):
         mpl.suptitle(str(title).replace('_', '\_'), fontsize=9)
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
+
+    def plot_avgevent_traces(self, ax, tb, events=None):
+
+        nevtimes = 0
+        line = {'avgevoked': 'k-', 'avgspont': 'r-'}
+        if events is not None:
+            for evtype in ['avgevoked', 'avgspont']:
+                ave = []
+                for i in range(len(events)):
+                    print('evtype: ', evtype, '\n', events[i][evtype])
+                    if i == 0:
+                        ave = np.array(events[i][evtype])
+                    else:
+                        ave += np.array(events[i][evtype])
+                ave = ave/len(events)
+                if len(ave) == 0:
+                    continue
+                # print(tb)
+           #     print(ave)
+                #print(np.mean(ave, axis=0))
+                ax.plot(tb, 1e12*np.mean(ave, axis=0), line[evtype], rasterized=self.rasterize)
+            
+            # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
+            # if len(avevoked) > 0:
+            #     axlr.plot(txb, np.mean(avevoked, axis=0), 'r-')
+            # if len(avgspont) > 0:
+            #     axlr.plot(txb, np.mean(avgspont, axis=0), 'b-')
+            # mpl.show()            
 
     def plot_average_traces(self, ax, tb, mdata, color='k'):
         """
@@ -744,6 +889,12 @@ class AnalyzeMap(object):
             2. calculate a high-pass filtered version of the PD signal to emulate the capacitative cross-talk
             3. add (or subtract) a small amount of the PD signal to emulate the DC part of the cross-talk
             4. subtract it from the data
+        
+        Problems:
+        1. averaging all traces in CC can produce artifacts across all traces when spikes occur
+        2. averaging all traces in VC can reduce response amplitudes when there are lots of responses... 
+        Attempts to use the PD signal or shutter signal (filtered or not) didn't work.
+        
         """
         # meanpddata = self.AR.Photodiode.mean(axis=0)  # get the average PD signal that was recorded
         # if meanpddata is not None:
@@ -755,24 +906,52 @@ class AnalyzeMap(object):
         # if self.shutter is not None:
         #     crossshutter = 0* 0.365e-21*Util.SignalFilter_HPFBessel(self.shutter['data'][0], 1900., self.AR.Photodiode_sample_rate[0], NPole=2, bidir=False)
         #     crosstalk += crossshutter
+        
+        testplot = False
         avd = data.copy()
         while avd.ndim > 1:
             avd = np.mean(avd, axis=0)
-#        print('avdata shape: ', avd.shape)
+        avgd = avd # FILT.SignalFilter_LPFButter(avd, 10000., self.AR.sample_rate[0], NPole=8)
+        avglaser = np.mean(self.AR.LaserBlue_pCell, axis=0) # FILT.SignalFilter_LPFButter(np.mean(self.AR.LaserBlue_pCell, axis=0), 10000., self.AR.sample_rate[0], NPole=8)
+        maxi = np.argmin(np.fabs(self.tb - 0.6))
+#        print('maxi: ', maxi)
+        scf, intcept = np.polyfit(avglaser[:maxi], avgd[:maxi], 1)
+        avglaserd = np.mean(self.AR.LaserBlue_pCell, axis=0)
+#        print(scf, intcept)
+        lbr = avglaserd*scf + intcept
         datar = np.zeros_like(data)
         for i in range(data.shape[0]):
-            datar[i,:] = data[i,:] - avd
+            datar[i,:] = data[i,:] - lbr # - avd
+        if testplot:
+            import pyqtgraph as pg
+            app = pg.QtGui.QApplication(sys.argv)
+            win = pg.GraphicsWindow()
+            p1 = win.addPlot(0, 0)
+            p2 = win.addPlot(1, 0)
+            p3 = win.addPlot(2, 0)
+            for i in range(10):
+                p1.plot(self.tb, data[0,i,:], pen=pg.mkPen('r'))
+                p1.plot(self.tb, datar[0,i,:], pen=pg.mkPen('g'))
+            p1.plot(self.tb, avd, pen=pg.mkPen('w'))
+            p1.plot(self.tb, lbr, pen=pg.mkPen('c'))
+            p2.plot(self.tb, avglaser, pen=pg.mkPen('m'))
+            p3.plot(self.tb, np.mean(datar[0], axis=0), pen=pg.mkPen('y'))
+            sys.exit(app.exec_())
+            exit()
 #        print('dmax: ', np.max(np.max(datar)))
 #        print('dmin: ', np.min(np.min(datar)))
         return(datar, avd)
 
     def analyze_one_map(self, dataset, plotevents=False):
-        self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
+        self.data, self.tb, pars, info=self.readProtocol(dataset, sparsity=None)
         if self.data is None:   # check that we were able to retrieve data
             self.P = None
             return None
         self.last_dataset = dataset
-        self.data_clean, self.avgdata = self.fix_pd_artifact(self.data)
+        if self.fix_photodiode_artifact:
+            self.data_clean, self.avgdata = self.fix_pd_artifact(self.data)
+        else:
+            self.data_clean = self.data
         stimtimes = []
 #        print(self.twin_resp)
         data_nostim = []
@@ -828,6 +1007,7 @@ class AnalyzeMap(object):
                                  ('C', {'pos': [0.07, 0.3, 0.25, 0.15]}),
                                  ('D', {'pos': [0.07, 0.3, 0.05, 0.15]}),
                                  ('E', {'pos': [0.47, 0.45, 0.05, 0.85]}),
+                            #     ('F', {'pos': [0.47, 0.45, 0.10, 0.30]}),
                                  ])  # a1 is cal bar
 
         self.P = PH.Plotter(self.plotspecs, label=False, figsize=(10., 8.))
@@ -839,7 +1019,7 @@ class AnalyzeMap(object):
             # print (self.MT.imagemetadata)
             # self.MT.show_images()
             # exit(1)
-        self.plot_average_traces(self.P.axdict['C'], self.tb, self.data)
+       # self.plot_average_traces(self.P.axdict['C'], self.tb, self.data_clean)
         
         ident = 0
         if ident == 0:
@@ -856,6 +1036,8 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
         self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])
+        self.plot_avgevent_traces(self.P.axdict['C'], results['events'][0]['aveventtb'], events=results['events'])
+        
         if self.photodiode:
             self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
        # mpl.show()
@@ -898,7 +1080,6 @@ if __name__ == '__main__':
         cellid = int(args.do_one)
     else:
         raise ValueError('no cell id found for %s' % args.do_one)
-    print(dir(DP))
     cell = DP.excel_as_df[DP.excel_as_df['CellID'] == cellid].index[0]
 
     print('cellid: ', cellid)
