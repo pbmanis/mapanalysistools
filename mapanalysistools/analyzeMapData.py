@@ -319,9 +319,7 @@ class AnalyzeMap(object):
         rate is the data sample rate (in msec...)
         pkt is the list of times to compare against.
         """
-        # print('tstarts: ', tstarts)
-        # print('twin: ', twin)
-        # print('pkt: ', pkt)
+
         # print('rate: ', rate)
         if mode is 'reject':
             npk = list(range(len(pkt)))
@@ -333,8 +331,6 @@ class AnalyzeMap(object):
                     continue
                 t0 = int(tw/(1e-3*rate))
                 te = t0 + int(twin/(1e-3*rate))
-#                print('to, te: ', t0, te)
-                # if i < 10:
                 if mode is 'reject':
                     if pkt[k] >= t0 and pkt[k] <  te:
                         npk[k] = None
@@ -344,8 +340,6 @@ class AnalyzeMap(object):
                             npk.append(k)
                 else:
                     raise ValueError('analyzeMapData:select_times: mode must be accept or reject; got: ' % mode)
-#        print('npk: ', npk)
-#        print('\n')
         npk = [nk for nk in npk if nk is not None]
         return npk
 
@@ -354,7 +348,6 @@ class AnalyzeMap(object):
         """
         data_nostim is a list of points where the stimulus/response DOES NOT occur, so we can compute the SD
         for the threshold in a consistent manner if there are evoked responses in the trace.
-                
         """
         
         use_AJ = True
@@ -373,7 +366,8 @@ class AnalyzeMap(object):
                     data[r,t,:] = FILT.NotchFilter(data[r, t, :], notchf=self.notch_freqs, Q=120., QScale=True, samplefreq=samplefreq)
         mdata = np.mean(data, axis=0)  # mean across ALL reps
         rate = rate*1e3  # convert rate to msec
-        # make visual maps
+ 
+        # make visual maps with simple scores
         nstim = len(self.twin_resp)
         self.nstim = nstim
         # find max position stored in the info dict
@@ -397,17 +391,7 @@ class AnalyzeMap(object):
                     (t, ix, pmax,  self.protocol))+self.colors['white'])
                 raise ValueError()
 
-        # print('pos: ', np.sort(pos))
-        # print('pos shape ', pos.shape)
-        # print('data shape: ', data.shape)
-        # for p1 in range(pos.shape[0]-1):
-        #     for p2 in range(p1+1, pos.shape[0]):
-        #         if all(pos[p1] == pos[p2]):
-        #             print(colors['red']+'matching values found... ')
-        
-        #exit()
         nr = 0
-        # fign, axlr = mpl.subplots(1,1)
 
         key1=[]
         key2=[]
@@ -421,15 +405,14 @@ class AnalyzeMap(object):
         events = {}
         eventlist = []  # event histogram across ALL events/trials
         nevents = 0
-        # print('sign: ', self.sign)
         if eventhist:
             v = [-1.0, 0., self.taus[0], self.taus[1]]
             x = np.linspace(0., self.taus[1]*5, int(50./rate))
             cbtemplate = functions.pspFunc(v, x, risePower=2.0).view(np.ndarray)
             tmaxev = 1000.*np.max(tb) # msec
             jmax = int(tmaxev/rate)
-            avgspont = []
-            avevoked = []
+            avg_spont = []
+            avg_evoked = []
             for j in range(data.shape[0]):  # all trials
                 result = []
                 crit = []
@@ -462,7 +445,7 @@ class AnalyzeMap(object):
                         smpks.append(np.array(aj.smoothed_peaks)[npk])
                         smpksindex.append(np.array(aj.smpkindex)[npk])
 
-                        if aj.averaged:
+                        if aj.averaged:  # grand average, calculated after deconvolution
                             avgev.append(aj.avgevent)
                             avgtb.append(aj.avgeventtb)
                             avgnpts.append(aj.avgnpts)
@@ -471,7 +454,6 @@ class AnalyzeMap(object):
                             avgtb.append([])
                             avgnpts.append(0)
                         
-                        # accumulate events sorted by spont or evoked.
                         # define:
                         # spont is not in evoked window, and no sooner than 10 msec before a stimulus,
                         # at least 4*tau[0] after start of trace, and 5*tau[1] before end of trace
@@ -479,39 +461,16 @@ class AnalyzeMap(object):
                         # data for events are aligned on the peak of the event, and go 4*tau[0] to 5*tau[1]
                         evtimes = np.array(self.stimtimes['start'])+0.001
                         ok_events = np.array(aj.smpkindex)[npk]
-#                        print('ok_events: ', ok_events)
                         npk_ev = self.select_events(ok_events, evtimes, 0.005, rate, mode='accept')
-#                        print('npk_ev: ', npk_ev)
-                        # print(self.taus, rate)
-                        t0 = int(self.taus[0]*4.0/(rate))
-                        te = int(self.taus[1]*5.0/(rate))
-                        for iev, nev in enumerate(np.array(aj.smpkindex)[npk_ev]):
-                            # print(nev-t0, nev+te, (nev+te)-(nev-t0),)
-                            if nev+te > idata.shape[0]:
-                                continue
-                            dsel = idata[nev-t0:nev+te].copy()
-                            if iev == 0:
-                                ev_avg = dsel
-                            else:
-                                ev_avg += dsel
-                        if len(npk_ev) > 0:
-                            avevoked.append(ev_avg/iev)
-                        
+                        ev_onsets = np.array(aj.onsets)[npk_ev]
+                        avg_evoked_one, avg_evokedtb, allev_evoked = aj.average_events(ev_onsets)
+                        avg_evoked.append(avg_evoked_one)
+                        txb = avg_evokedtb  # only need one of these.
                         npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.taus[1]*5*1e-3), rate, mode='accept')
-#                        print('npk_sp: ', npk_sp)
-                        for isp, nsp in enumerate((np.array(aj.smpkindex)[npk_sp])):
-                            if nsp-t0 < 0 or nsp+te > idata.shape[0]:
-                                continue
-                            dsel = idata[nsp-t0:nsp+te].copy()
-                            if isp == 0:
-                                sp_avg = dsel
-                            else:
-                                sp_avg += dsel
-                        if len(npk_sp) > 0:
-                            avgspont.append(sp_avg/isp)
-                     #   print(i, ' spont spikes: ', isp)
-                        txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
-                    
+                        sp_onsets = np.array(aj.onsets)[npk_sp]
+                        avg_spont_one, avg_sponttb, allev_spont = aj.average_events(sp_onsets)
+                        avg_spont.append(avg_spont_one)
+                        
                         if testplots:
                             aj.plots(title='%d' % i, events=None)
                       #  print ('eventlist: ', eventlist)
@@ -534,7 +493,7 @@ class AnalyzeMap(object):
                                          cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
                             mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
-                    'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avevoked, 'avgspont': avgspont, 'aveventtb': txb}
+                    'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb}
         # print('analyze protocol returns, nevents = %d' % nevents)
             # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
             # if len(avevoked) > 0:
