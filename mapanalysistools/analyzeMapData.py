@@ -15,21 +15,20 @@ For example:
 import sys
 import sqlite3
 import matplotlib
-matplotlib.use('MacOSX')
+#matplotlib.use('MacOSX')
 rcParams = matplotlib.rcParams
 rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
 rcParams['pdf.fonttype'] = 42
 rcParams['ps.fonttype'] = 42
 rcParams['text.latex.unicode'] = True
-rcParams['font.family'] = 'sans-serif'
+#rcParams['font.family'] = 'sans-serif'
 rcParams['font.weight'] = 'regular'                  # you can omit this, it's the default
-rcParams['font.sans-serif'] = ['Arial']
+#rcParams['font.sans-serif'] = ['Arial']
 
 import pyqtgraph.multiprocess as mp
 
 import argparse
 import numpy as np
-import numpy.ma as MA
 import scipy.signal
 import scipy.ndimage
 import os.path
@@ -42,6 +41,7 @@ import datetime
 import timeit
 import ephysanalysis as EP
 import montage as MONT
+import minis
 
 #from pyqtgraph.metaarray import MetaArray
 
@@ -196,14 +196,14 @@ class AnalyzeMap(object):
         self.notch_freqs = [60.]
         self.lbr_command = False  # laser blue raw waveform (command)
         self.photodiode = False  # photodiode waveform (recorded)
-        self.fix_photodiode_artifact = True
+        self.fix_photodiode_artifact = False
         self.response_window = 0.030  # seconds
         self.direct_window = 0.001
         # set some defaults - these will be overwrittein with readProtocol
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
        # self.taus = [0.5, 2.0]
-        self.taus = [0.2, 1.0]
+        self.taus = [0.0002, 0.005]
         self.threshold = 3.0
         self.sign = -1  # negative for EPSC, positive for IPSC
         self.scale_factor = 1 # scale factore for data (convert to pA or mV,,, )
@@ -214,6 +214,7 @@ class AnalyzeMap(object):
         self.rasterize = rasterize
         self.colors = {'red': '\x1b[31m', 'yellow': '\x1b[33m', 'green': '\x1b[32m', 'magenta': '\x1b[35m',
               'blue': '\x1b[34m', 'cyan': '\x1b[36m' , 'white': '\x1b[0m', 'backgray': '\x1b[100m'}
+        self.MA = minis.minis_methods.MiniAnalyses()  # get a minianalysis instance
 
     def set_notch(self, notch, freqs=[60]):
         self.notch = notch
@@ -311,7 +312,7 @@ class AnalyzeMap(object):
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
-    def select_events(self, pkt, tstarts, twin, rate, mode='reject'):
+    def select_events(self, pkt, tstarts, twin, rate, mode='reject', firstonly=False):
         """
         return indices where the input index is outside a set of time windows.
         tstarts is a list of window starts
@@ -325,12 +326,13 @@ class AnalyzeMap(object):
             npk = list(range(len(pkt)))
         else:
             npk = []
-        for k in range(len(pkt)):
-            for itw, tw in enumerate(tstarts): # and for each stimulus
+        for itw, tw in enumerate(tstarts): # and for each stimulus
+            first = False
+            for k in range(len(pkt)):
                 if mode is 'reject' and npk[k] is None:
                     continue
-                t0 = int(tw/(1e-3*rate))
-                te = t0 + int(twin/(1e-3*rate))
+                t0 = int(tw/(rate))
+                te = t0 + int(twin/(rate))
                 if mode is 'reject':
                     if pkt[k] >= t0 and pkt[k] <  te:
                         npk[k] = None
@@ -338,6 +340,10 @@ class AnalyzeMap(object):
                     if pkt[k] >= t0 and pkt[k] < te:
                         if k not in npk:
                             npk.append(k)
+                    if not firstonly and not first:
+                        first = True
+                        break
+                        
                 else:
                     raise ValueError('analyzeMapData:select_times: mode must be accept or reject; got: ' % mode)
         npk = [nk for nk in npk if nk is not None]
@@ -365,8 +371,9 @@ class AnalyzeMap(object):
                 if self.notch:
                     data[r,t,:] = FILT.NotchFilter(data[r, t, :], notchf=self.notch_freqs, Q=120., QScale=True, samplefreq=samplefreq)
         mdata = np.mean(data, axis=0)  # mean across ALL reps
-        rate = rate*1e3  # convert rate to msec
- 
+#        rate = rate*1e3  # convert rate to msec
+        self.rate = rate
+
         # make visual maps with simple scores
         nstim = len(self.twin_resp)
         self.nstim = nstim
@@ -407,9 +414,9 @@ class AnalyzeMap(object):
         nevents = 0
         if eventhist:
             v = [-1.0, 0., self.taus[0], self.taus[1]]
-            x = np.linspace(0., self.taus[1]*5, int(50./rate))
+            x = np.linspace(0., self.taus[1]*5, int(0.050/rate))
             cbtemplate = functions.pspFunc(v, x, risePower=2.0).view(np.ndarray)
-            tmaxev = 1000.*np.max(tb) # msec
+            tmaxev = np.max(tb) # msec
             jmax = int(tmaxev/rate)
             avg_spont = []
             avg_evoked = []
@@ -461,12 +468,12 @@ class AnalyzeMap(object):
                         # data for events are aligned on the peak of the event, and go 4*tau[0] to 5*tau[1]
                         evtimes = np.array(self.stimtimes['start'])+0.001
                         ok_events = np.array(aj.smpkindex)[npk]
-                        npk_ev = self.select_events(ok_events, evtimes, 0.005, rate, mode='accept')
+                        npk_ev = self.select_events(ok_events, evtimes, 0.015, rate, mode='accept')
                         ev_onsets = np.array(aj.onsets)[npk_ev]
                         avg_evoked_one, avg_evokedtb, allev_evoked = aj.average_events(ev_onsets)
                         avg_evoked.append(avg_evoked_one)
                         txb = avg_evokedtb  # only need one of these.
-                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.taus[1]*5*1e-3), rate, mode='accept')
+                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.taus[1]*5), rate, mode='accept')
                         sp_onsets = np.array(aj.onsets)[npk_sp]
                         avg_spont_one, avg_sponttb, allev_spont = aj.average_events(sp_onsets)
                         avg_spont.append(avg_spont_one)
@@ -489,7 +496,7 @@ class AnalyzeMap(object):
                             mpl.plot(tb, self.scale_factor*data.view(np.ndarray)[j, i, :], 'k-', linewidth=0.5)
                             for k in range(len(res)):
                                 mpl.plot(tb[res[k][0]], self.scale_factor*data.view(np.ndarray)[j, i, res[k][0]], 'ro')
-                                mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate/1000.,
+                                mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate,
                                          cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
                             mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
@@ -502,7 +509,7 @@ class AnalyzeMap(object):
             #     axlr.plot(txb, np.mean(avgspont, axis=0), 'b-')
             # mpl.show()
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
-               'aj': aj, 'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset}
+               'aj': aj, 'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset, 'sign': self.sign}
 
     def scale_and_rotate(self, poslist, sign=[1., 1.], scaleCorr=1., scale=1e6, autorotate=False, angle=0.):
         """ 
@@ -612,7 +619,7 @@ class AnalyzeMap(object):
                 nevents += len(xn)
                 y.extend(xn)
             y = np.array(y)
-            bins = np.linspace(0., self.AR.tstart, int(1000.*self.AR.tstart/2.0)+1)
+            bins = np.linspace(0., self.AR.tstart, int(self.AR.tstart*1000/2.0)+1)
             # print('tstart: host analyzemapdata and #bins: ', self.AR.tstart, len(bins))
             # print('max in bins: {0:.6f} '.format(np.max(bins)))
             # print('step: {0:.6f}'.format(np.mean(np.diff(bins))))
@@ -646,37 +653,62 @@ class AnalyzeMap(object):
                      'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=False) # self.rasterize)
             
 #        print('stacked trace event count: ', nevtimes)
-        mpl.suptitle(str(title).replace('_', '\_'), fontsize=9)
+        mpl.suptitle(str(title).replace('_', '\_'), fontsize=8)
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
 
-    def plot_avgevent_traces(self, ax, tb, events=None):
+    def plot_avgevent_traces(self, ax, events=None):
 
         nevtimes = 0
-        line = {'avgevoked': 'k-', 'avgspont': 'r-'}
-        if events is not None:
-            for evtype in ['avgevoked', 'avgspont']:
-                ave = []
-                for i in range(len(events)):
-                    print('evtype: ', evtype, '\n', events[i][evtype])
-                    if i == 0:
-                        ave = np.array(events[i][evtype])
-                    else:
-                        ave += np.array(events[i][evtype])
-                ave = ave/len(events)
-                if len(ave) == 0:
-                    continue
-                # print(tb)
-           #     print(ave)
-                #print(np.mean(ave, axis=0))
-                ax.plot(tb, 1e12*np.mean(ave, axis=0), line[evtype], rasterized=self.rasterize)
-            
-            # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
-            # if len(avevoked) > 0:
-            #     axlr.plot(txb, np.mean(avevoked, axis=0), 'r-')
-            # if len(avgspont) > 0:
-            #     axlr.plot(txb, np.mean(avgspont, axis=0), 'b-')
-            # mpl.show()            
+        line = {'avgevoked': 'r-', 'avgspont': 'k-'}
+
+        if events is None:
+            return
+        axt = ax # 
+        # [ax, ax.twinx()]
+        # set the bounding box of the twin axis to match the primary axis
+        # bbox = axt[0].get_position()
+        # axt[1].set_position(bbox)
+        axt[1].set_ylabel('Spont (pA)')
+
+        axt[0].spines['left'].set_color('r')
+        axt[0].set_ylabel('Evoked (pA)')
+        axt[0].yaxis.label.set_color('r')
+        axt[0].tick_params(axis='y', colors='r')
+
+        for iax, evtype in enumerate(['avgevoked', 'avgspont']):
+            nev = 0
+            ave = []
+            tb = events[0]['aveventtb']
+            for i in range(len(events)):
+                for j, ev in enumerate(events[i][evtype]):
+                    if len(ev) == 0:
+                        continue
+                    nev += 1
+                    ave.append(ev)
+#            ave = [a for a in ave if not isinstance(a, list)]
+            ave = np.array(ave)
+            if ave.shape[0] == 0:
+                continue
+            tx = np.broadcast_to(tb, (ave.shape[0], tb.shape[0])).T
+
+            self.MA.set_sign(self.sign)
+            self.MA.fit_average_event(tb, np.mean(ave, axis=0))
+            Amplitude = self.MA.fitresult[0]
+            tau1 = self.MA.fitresult[1]
+            tau2 = self.MA.fitresult[2]
+            bfdelay = self.MA.fitresult[3]
+            bfit = self.MA.avg_best_fit
+            if self.sign == -1:
+                amp = np.min(bfit)
+            else:
+                amp = mp.max(bfit)
+            txt = f"Amp: {1e12*Amplitude:.1f} [real: {1e12*amp:.1f}] tau1:{tau1:.2f} tau2: {tau2:.2f}"
+            axt[iax].text(0.05, 0.95, txt, fontsize=8)
+            axt[iax].plot(tx, 1e12*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
+            axt[iax].plot(tb, 1e12*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
+            axt[iax].plot(tb, 1e12*np.mean(ave, axis=0), line[evtype], linewidth=0.625, rasterized=self.rasterize)
+            axt[0].set_label(evtype)
 
     def plot_average_traces(self, ax, tb, mdata, color='k'):
         """
@@ -871,8 +903,9 @@ class AnalyzeMap(object):
         while avd.ndim > 1:
             avd = np.mean(avd, axis=0)
         avgd = avd # FILT.SignalFilter_LPFButter(avd, 10000., self.AR.sample_rate[0], NPole=8)
+        
         avglaser = np.mean(self.AR.LaserBlue_pCell, axis=0) # FILT.SignalFilter_LPFButter(np.mean(self.AR.LaserBlue_pCell, axis=0), 10000., self.AR.sample_rate[0], NPole=8)
-        maxi = np.argmin(np.fabs(self.tb - 0.6))
+        maxi = np.argmin(np.fabs(self.tb - 0.0006))
 #        print('maxi: ', maxi)
         scf, intcept = np.polyfit(avglaser[:maxi], avgd[:maxi], 1)
         avglaserd = np.mean(self.AR.LaserBlue_pCell, axis=0)
@@ -962,9 +995,10 @@ class AnalyzeMap(object):
         self.mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}        
         self.plotspecs = OrderedDict([('A', {'pos': [0.07, 0.3, 0.62, 0.3]}),
                                  ('A1',{'pos': [0.37, 0.012, 0.62, 0.3]}), # scale bar
-                                 ('B', {'pos': [0.07, 0.3, 0.45, 0.15]}),
-                                 ('C', {'pos': [0.07, 0.3, 0.25, 0.15]}),
-                                 ('D', {'pos': [0.07, 0.3, 0.05, 0.15]}),
+                                 ('B', {'pos': [0.07, 0.3, 0.475, 0.125]}),
+                                 ('C1', {'pos': [0.07, 0.3, 0.31, 0.125]}),
+                                 ('C2', {'pos': [0.07, 0.3, 0.16, 0.125]}),
+                                 ('D', {'pos': [0.07, 0.3, 0.05, 0.075]}),
                                  ('E', {'pos': [0.47, 0.45, 0.05, 0.85]}),
                             #     ('F', {'pos': [0.47, 0.45, 0.10, 0.30]}),
                                  ])  # a1 is cal bar
@@ -995,7 +1029,7 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
         self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])
-        self.plot_avgevent_traces(self.P.axdict['C'], results['events'][0]['aveventtb'], events=results['events'])
+        self.plot_avgevent_traces([self.P.axdict['C1'], self.P.axdict['C2']], events=results['events'])
         
         if self.photodiode:
             self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
