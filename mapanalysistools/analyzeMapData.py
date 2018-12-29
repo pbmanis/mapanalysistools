@@ -355,7 +355,7 @@ class AnalyzeMap(object):
         data_nostim is a list of points where the stimulus/response DOES NOT occur, so we can compute the SD
         for the threshold in a consistent manner if there are evoked responses in the trace.
         """
-        
+
         use_AJ = True
         aj = minis_methods.AndradeJonas()
         cb = minis_methods.ClementsBekkers()
@@ -471,9 +471,12 @@ class AnalyzeMap(object):
                         npk_ev = self.select_events(ok_events, evtimes, 0.015, rate, mode='accept')
                         ev_onsets = np.array(aj.onsets)[npk_ev]
                         avg_evoked_one, avg_evokedtb, allev_evoked = aj.average_events(ev_onsets)
+                        self.fit_tau1 = aj.fitted_tau1
+                        self.fit_tau2 = aj.fitted_tau2
+                        self.fit_amp = aj.Amplitude
                         avg_evoked.append(avg_evoked_one)
                         txb = avg_evokedtb  # only need one of these.
-                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.taus[1]*5), rate, mode='accept')
+                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.fit_tau1*5), rate, mode='accept')
                         sp_onsets = np.array(aj.onsets)[npk_sp]
                         avg_spont_one, avg_sponttb, allev_spont = aj.average_events(sp_onsets)
                         avg_spont.append(avg_spont_one)
@@ -508,8 +511,10 @@ class AnalyzeMap(object):
             # if len(avgspont) > 0:
             #     axlr.plot(txb, np.mean(avgspont, axis=0), 'b-')
             # mpl.show()
+
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
-               'aj': aj, 'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset, 'sign': self.sign}
+               'aj': aj, 'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset, 
+               'sign': self.sign, 'avg_tau1': aj.fitted_tau1, 'avg_tau2': aj.fitted_tau2, 'avg_amplitude': aj.Amplitude}
 
     def scale_and_rotate(self, poslist, sign=[1., 1.], scaleCorr=1., scale=1e6, autorotate=False, angle=0.):
         """ 
@@ -640,9 +645,10 @@ class AnalyzeMap(object):
             if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
                 ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
                         rasterized=self.rasterize, zorder=10)
-            if events is not None:
+            if events is not None and i in events.keys():
                 nevtimes += len(events[0]['smpksindex'][i])
-                #print(events[i]['smpksindex'])
+                # print(i, events.keys())
+                # print(events[i]['smpksindex'])
                 if len(tb[events[0]['smpksindex'][i]]) > 0 and len(mdata[0, i, events[0]['smpksindex'][i]]) > 0:
 #                    print('stacked2: tb, mdata shapes: ', tb[events[0]['smpksindex'][i]].shape, mdata[0, i,
 #                         events[0]['smpksindex'][i]].shape)
@@ -657,7 +663,7 @@ class AnalyzeMap(object):
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
 
-    def plot_avgevent_traces(self, ax, events=None):
+    def plot_avgevent_traces(self, ax, events=None, scale=1.0):
 
         nevtimes = 0
         line = {'avgevoked': 'r-', 'avgspont': 'k-'}
@@ -702,12 +708,12 @@ class AnalyzeMap(object):
             if self.sign == -1:
                 amp = np.min(bfit)
             else:
-                amp = mp.max(bfit)
-            txt = f"Amp: {1e12*Amplitude:.1f} [real: {1e12*amp:.1f}] tau1:{tau1:.2f} tau2: {tau2:.2f}"
-            axt[iax].text(0.05, 0.95, txt, fontsize=8)
-            axt[iax].plot(tx, 1e12*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
-            axt[iax].plot(tb, 1e12*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
-            axt[iax].plot(tb, 1e12*np.mean(ave, axis=0), line[evtype], linewidth=0.625, rasterized=self.rasterize)
+                amp = np.max(bfit)
+            txt = f"Amp: {Amplitude:.1f} [real: {scale*amp:.1f}] tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f}"
+            axt[iax].text(0.05, 0.95, txt, fontsize=8, transform=axt[iax].transAxes)
+            axt[iax].plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
+            axt[iax].plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
+            axt[iax].plot(tb, scale*np.mean(ave, axis=0), line[evtype], linewidth=0.625, rasterized=self.rasterize)
             axt[0].set_label(evtype)
 
     def plot_average_traces(self, ax, tb, mdata, color='k'):
@@ -935,6 +941,7 @@ class AnalyzeMap(object):
         return(datar, avd)
 
     def analyze_one_map(self, dataset, plotevents=False):
+       # print('ANALYZE ONE MAP')
         self.data, self.tb, pars, info=self.readProtocol(dataset, sparsity=None)
         if self.data is None:   # check that we were able to retrieve data
             self.P = None
@@ -972,7 +979,10 @@ class AnalyzeMap(object):
             results = self.last_results
         if results is None:
             return
-
+        if '_IC__' in str(dataset.name) or 'CC' in str(dataset.name):
+            scf = 1e3  # mV
+        else:
+            scf = 1e12 # pA, vc
         # f, ax = mpl.subplots(2,2)
 #         ax = ax.ravel()
 #         for k, s in enumerate(['I_max', 'ZScore', 'Qr', 'Qb']):
@@ -1029,7 +1039,7 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
         self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])
-        self.plot_avgevent_traces([self.P.axdict['C1'], self.P.axdict['C2']], events=results['events'])
+        self.plot_avgevent_traces([self.P.axdict['C1'], self.P.axdict['C2']], events=results['events'], scale=scf)
         
         if self.photodiode:
             self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
