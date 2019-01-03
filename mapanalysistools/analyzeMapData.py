@@ -196,7 +196,7 @@ class AnalyzeMap(object):
         self.notch_freqs = [60.]
         self.lbr_command = False  # laser blue raw waveform (command)
         self.photodiode = False  # photodiode waveform (recorded)
-        self.fix_photodiode_artifact = False
+        self.fix_photodiode_artifact = True
         self.response_window = 0.030  # seconds
         self.direct_window = 0.001
         # set some defaults - these will be overwrittein with readProtocol
@@ -418,8 +418,8 @@ class AnalyzeMap(object):
             cbtemplate = functions.pspFunc(v, x, risePower=2.0).view(np.ndarray)
             tmaxev = np.max(tb) # msec
             jmax = int(tmaxev/rate)
-            avg_spont = []
-            avg_evoked = []
+            print('data shape: ', data.shape)
+            #exit()
             for j in range(data.shape[0]):  # all trials
                 result = []
                 crit = []
@@ -430,6 +430,12 @@ class AnalyzeMap(object):
                 avgev = []
                 avgtb = []
                 avgnpts = []
+                avg_spont = []
+                avg_evoked = []
+                fit_tau1 = []
+                fit_tau2 = []
+                fit_amp = []
+                
                 for i in range(data.shape[1]):  # all targets
                     if use_AJ:
                         idata = data.view(np.ndarray)[j, i, :]
@@ -471,12 +477,12 @@ class AnalyzeMap(object):
                         npk_ev = self.select_events(ok_events, evtimes, 0.015, rate, mode='accept')
                         ev_onsets = np.array(aj.onsets)[npk_ev]
                         avg_evoked_one, avg_evokedtb, allev_evoked = aj.average_events(ev_onsets)
-                        self.fit_tau1 = aj.fitted_tau1
-                        self.fit_tau2 = aj.fitted_tau2
-                        self.fit_amp = aj.Amplitude
+                        fit_tau1.append(aj.fitted_tau1)  # these are the average fitted values for the i'th trace
+                        fit_tau2.append(aj.fitted_tau2)
+                        fit_amp.append(aj.Amplitude)
                         avg_evoked.append(avg_evoked_one)
                         txb = avg_evokedtb  # only need one of these.
-                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(self.fit_tau1*5), rate, mode='accept')
+                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(aj.fitted_tau1*5), rate, mode='accept')
                         sp_onsets = np.array(aj.onsets)[npk_sp]
                         avg_spont_one, avg_sponttb, allev_spont = aj.average_events(sp_onsets)
                         avg_spont.append(avg_spont_one)
@@ -503,7 +509,8 @@ class AnalyzeMap(object):
                                          cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
                             mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
-                    'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb}
+                    'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
+                    'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp}
         # print('analyze protocol returns, nevents = %d' % nevents)
             # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
             # if len(avevoked) > 0:
@@ -625,40 +632,32 @@ class AnalyzeMap(object):
                 y.extend(xn)
             y = np.array(y)
             bins = np.linspace(0., self.AR.tstart, int(self.AR.tstart*1000/2.0)+1)
-            # print('tstart: host analyzemapdata and #bins: ', self.AR.tstart, len(bins))
-            # print('max in bins: {0:.6f} '.format(np.max(bins)))
-            # print('step: {0:.6f}'.format(np.mean(np.diff(bins))))
             axh.hist(y, bins=bins,
                 facecolor='k', edgecolor='k', linewidth=0.5, histtype='stepfilled', align='right')
             self.plot_timemarker(axh)
             PH.nice_plot(axh, spines=['left', 'bottom'], position=-0.025, direction='outward', axesoff=False)
             axh.set_xlim(0., self.AR.tstart-0.001)
-#            print('histograme event count: ', nevents, y.shape)
 
     def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None):
         if ax is None:
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
         nevtimes = 0
-        for i in range(mdata.shape[1]):
-#            print('stacked: tb, mdata shapes: ', tb.shape, mdata.shape)
-            if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
-                ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
-                        rasterized=self.rasterize, zorder=10)
-            if events is not None and i in events.keys():
-                nevtimes += len(events[0]['smpksindex'][i])
-                # print(i, events.keys())
-                # print(events[i]['smpksindex'])
-                if len(tb[events[0]['smpksindex'][i]]) > 0 and len(mdata[0, i, events[0]['smpksindex'][i]]) > 0:
-#                    print('stacked2: tb, mdata shapes: ', tb[events[0]['smpksindex'][i]].shape, mdata[0, i,
-#                         events[0]['smpksindex'][i]].shape)
-                    # The following plot call causes problems if done rasterized. 
-                    # See: https://github.com/matplotlib/matplotlib/issues/12003
-                    # may be fixed in the future. For now, don't rasterize.
-                    ax.plot(tb[events[0]['smpksindex'][i]], mdata[0, i, events[0]['smpksindex'][i]]*self.scale_factor + self.stepi*i,
-                     'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=False) # self.rasterize)
+        for j in range(mdata.shape[0]):
+            for i in range(mdata.shape[1]):
+                if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
+                    ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
+                            rasterized=self.rasterize, zorder=10)
+                if events is not None and j in list(events.keys()):
+                    smpki = events[j]['smpksindex'][i]
+                    nevtimes += len(smpki)
+                    if len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
+                        # The following plot call causes problems if done rasterized. 
+                        # See: https://github.com/matplotlib/matplotlib/issues/12003
+                        # may be fixed in the future. For now, don't rasterize.
+                        ax.plot(tb[smpki], mdata[0, i, smpki]*self.scale_factor + self.stepi*i,
+                         'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=False) # self.rasterize)
             
-#        print('stacked trace event count: ', nevtimes)
         mpl.suptitle(str(title).replace('_', '\_'), fontsize=8)
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
@@ -709,8 +708,8 @@ class AnalyzeMap(object):
                 amp = np.min(bfit)
             else:
                 amp = np.max(bfit)
-            txt = f"Amp: {Amplitude:.1f} [real: {scale*amp:.1f}] tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f}"
-            axt[iax].text(0.05, 0.95, txt, fontsize=8, transform=axt[iax].transAxes)
+            txt = f"Amp: {Amplitude:.1f} [real: {scale*amp:.1f}] tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
+            axt[iax].text(0.05, 0.95, txt, fontsize=7, transform=axt[iax].transAxes)
             axt[iax].plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
             axt[iax].plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
             axt[iax].plot(tb, scale*np.mean(ave, axis=0), line[evtype], linewidth=0.625, rasterized=self.rasterize)
@@ -911,7 +910,7 @@ class AnalyzeMap(object):
         avgd = avd # FILT.SignalFilter_LPFButter(avd, 10000., self.AR.sample_rate[0], NPole=8)
         
         avglaser = np.mean(self.AR.LaserBlue_pCell, axis=0) # FILT.SignalFilter_LPFButter(np.mean(self.AR.LaserBlue_pCell, axis=0), 10000., self.AR.sample_rate[0], NPole=8)
-        maxi = np.argmin(np.fabs(self.tb - 0.0006))
+        maxi = np.argmin(np.fabs(self.tb - 0.6))
 #        print('maxi: ', maxi)
         scf, intcept = np.polyfit(avglaser[:maxi], avgd[:maxi], 1)
         avglaserd = np.mean(self.AR.LaserBlue_pCell, axis=0)
