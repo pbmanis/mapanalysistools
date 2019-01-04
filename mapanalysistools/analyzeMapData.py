@@ -651,7 +651,7 @@ class AnalyzeMap(object):
                 if events is not None and j in list(events.keys()):
                     smpki = events[j]['smpksindex'][i]
                     nevtimes += len(smpki)
-                    if len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
+                    if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
                         # The following plot call causes problems if done rasterized. 
                         # See: https://github.com/matplotlib/matplotlib/issues/12003
                         # may be fixed in the future. For now, don't rasterize.
