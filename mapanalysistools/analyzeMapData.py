@@ -15,7 +15,8 @@ For example:
 import sys
 import sqlite3
 import matplotlib
-#matplotlib.use('MacOSX')
+matplotlib.use('MacOSX')
+#matplotlib.use('Agg')
 rcParams = matplotlib.rcParams
 rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
 rcParams['pdf.fonttype'] = 42
@@ -31,6 +32,7 @@ import argparse
 import numpy as np
 import scipy.signal
 import scipy.ndimage
+
 import os.path
 from collections import OrderedDict
 
@@ -191,7 +193,7 @@ class AnalyzeMap(object):
         self.MT = MONT.montager.Montager()
         self.last_dataset = None
         self.last_results = None
-        self.LPF = 3000.
+        self.LPF = 5000.
         self.notch = False
         self.notch_freqs = [60.]
         self.lbr_command = False  # laser blue raw waveform (command)
@@ -212,6 +214,7 @@ class AnalyzeMap(object):
         self.stepi = 20.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
         self.rasterize = rasterize
+        self.methodname = 'aj'  # default event detector
         self.colors = {'red': '\x1b[31m', 'yellow': '\x1b[33m', 'green': '\x1b[32m', 'magenta': '\x1b[35m',
               'blue': '\x1b[34m', 'cyan': '\x1b[36m' , 'white': '\x1b[0m', 'backgray': '\x1b[100m'}
         self.MA = minis.minis_methods.MiniAnalyses()  # get a minianalysis instance
@@ -222,6 +225,14 @@ class AnalyzeMap(object):
     
     def set_LPF(self, LPF):
         self.LPF = LPF
+
+    def set_methodname(self, methodname):
+        if methodname in ['aj', 'AJ']:
+            self.methodname = 'aj'
+        elif methodname in ['cb', 'CB']:
+            self.methodname = 'cb'
+        else:
+            raise ValueError("Selected event detector %s is not valid" % methodname)
 
     def set_taus(self, taus):
         if len(taus) != 2:
@@ -328,11 +339,15 @@ class AnalyzeMap(object):
             npk = []
         for itw, tw in enumerate(tstarts): # and for each stimulus
             first = False
+            if isinstance(twin, list) or isinstance(twin, np.ndarray):  # either use array parallel to tstarts, or
+                ttwin = twin[itw]   
+            else:
+                ttwin = twin  # or use just a single value
             for k in range(len(pkt)):
                 if mode is 'reject' and npk[k] is None:
                     continue
-                t0 = int(tw/(rate))
-                te = t0 + int(twin/(rate))
+                t0 = int(tw/rate)
+                te = t0 + int(ttwin/rate)
                 if mode is 'reject':
                     if pkt[k] >= t0 and pkt[k] <  te:
                         npk[k] = None
@@ -356,7 +371,9 @@ class AnalyzeMap(object):
         for the threshold in a consistent manner if there are evoked responses in the trace.
         """
 
-        use_AJ = True
+        use_AJ = False
+        if self.methodname in ['aj', 'AJ']:
+            use_AJ = True 
         aj = minis_methods.AndradeJonas()
         cb = minis_methods.ClementsBekkers()
         filtfunc = scipy.signal.filtfilt
@@ -413,13 +430,7 @@ class AnalyzeMap(object):
         eventlist = []  # event histogram across ALL events/trials
         nevents = 0
         if eventhist:
-            v = [-1.0, 0., self.taus[0], self.taus[1]]
-            x = np.linspace(0., self.taus[1]*5, int(0.050/rate))
-            cbtemplate = functions.pspFunc(v, x, risePower=2.0).view(np.ndarray)
             tmaxev = np.max(tb) # msec
-            jmax = int(tmaxev/rate)
-            print('data shape: ', data.shape)
-            #exit()
             for j in range(data.shape[0]):  # all trials
                 result = []
                 crit = []
@@ -438,76 +449,93 @@ class AnalyzeMap(object):
                 
                 for i in range(data.shape[1]):  # all targets
                     if use_AJ:
-                        idata = data.view(np.ndarray)[j, i, :]
+                        jmax = int(tmaxev/rate)
                         aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                                 sign=self.sign, eventstartthr=eventstartthr)
+                        idata = data.view(np.ndarray)[j, i, :]
                         meandata = np.mean(idata[:jmax])
                         aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim, 
-                                thresh=self.threshold, llambda=10., order=7)
-
-                        # filter out events at times of stimulus artifacts
-                        pkt = aj.smpkindex.copy()
-                        npk1 = self.select_events(pkt, self.stimtimes['start'], 0.001, rate, mode='reject')
-                        npk2 = self.select_events(pkt, self.shutter_artifact, 0.001, rate, mode='reject')
-                        npk = list(set(npk1).intersection(set(npk2)))
-                        
-                        nevents += len(np.array(aj.onsets)[npk])
-                        result.append(np.array(aj.onsets)[npk])
-                        eventlist.append(tb[np.array(aj.onsets)[npk]])
-                        tpks.append(np.array(aj.peaks)[npk])
-                        smpks.append(np.array(aj.smoothed_peaks)[npk])
-                        smpksindex.append(np.array(aj.smpkindex)[npk])
-
-                        if aj.averaged:  # grand average, calculated after deconvolution
-                            avgev.append(aj.avgevent)
-                            avgtb.append(aj.avgeventtb)
-                            avgnpts.append(aj.avgnpts)
-                        else:
-                            avgev.append([])
-                            avgtb.append([])
-                            avgnpts.append(0)
-                        
-                        # define:
-                        # spont is not in evoked window, and no sooner than 10 msec before a stimulus,
-                        # at least 4*tau[0] after start of trace, and 5*tau[1] before end of trace
-                        # evoked is after the stimulus, in a window (usually ~ 5 msec)
-                        # data for events are aligned on the peak of the event, and go 4*tau[0] to 5*tau[1]
-                        evtimes = np.array(self.stimtimes['start'])+0.001
-                        ok_events = np.array(aj.smpkindex)[npk]
-                        npk_ev = self.select_events(ok_events, evtimes, 0.015, rate, mode='accept')
-                        ev_onsets = np.array(aj.onsets)[npk_ev]
-                        avg_evoked_one, avg_evokedtb, allev_evoked = aj.average_events(ev_onsets)
-                        fit_tau1.append(aj.fitted_tau1)  # these are the average fitted values for the i'th trace
-                        fit_tau2.append(aj.fitted_tau2)
-                        fit_amp.append(aj.Amplitude)
-                        avg_evoked.append(avg_evoked_one)
-                        txb = avg_evokedtb  # only need one of these.
-                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(aj.fitted_tau1*5), rate, mode='accept')
-                        sp_onsets = np.array(aj.onsets)[npk_sp]
-                        avg_spont_one, avg_sponttb, allev_spont = aj.average_events(sp_onsets)
-                        avg_spont.append(avg_spont_one)
-                        
-                        if testplots:
-                            aj.plots(title='%d' % i, events=None)
-                      #  print ('eventlist: ', eventlist)
+                                thresh=self.threshold/5.0, llambda=10., order=7)
+                        method = aj
                     else:
-                        res = cb.cbTemplateMatch(data.view(np.ndarray)[j, i, :jmax], 
-                                template=cbtemplate, threshold=self.threshold, sign=self.sign)
+                        jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
+                        cb.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
+                                sign=self.sign, eventstartthr=eventstartthr)
+                        idata = data.view(np.ndarray)[j, i, :]
+                        meandata = np.mean(idata[:jmax])
+                        res = cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
                         result.append(res)
                         crit.append(cb.Crit)
                         scale.append(cb.Scale)
-                        for r in res: # aj.onsets:
-                        #    print r
-                            if r[0] > 0.5:
-                                eventlist.append(r[0]*rate)
-                        if testplots:
-    #                        print ('testplots')
-                            mpl.plot(tb, self.scale_factor*data.view(np.ndarray)[j, i, :], 'k-', linewidth=0.5)
-                            for k in range(len(res)):
-                                mpl.plot(tb[res[k][0]], self.scale_factor*data.view(np.ndarray)[j, i, res[k][0]], 'ro')
-                                mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate,
-                                         cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
-                            mpl.show()
+                        method = cb
+                        
+                    # filter out events at times of stimulus artifacts
+                    pkt = method.smpkindex.copy()
+                    npk1 = self.select_events(pkt, self.shutter_artifact, 2*rate, rate, mode='reject')
+                    npk2 = self.select_events(pkt, self.stimtimes['start'], np.array(self.stimtimes['duration'])+2.0*rate, rate, mode='reject')
+                    pulse_end = np.array(self.stimtimes['start'])+np.array(self.stimtimes['duration'])
+                    npk3 = self.select_events(pkt, pulse_end, rate, rate, mode='reject')
+                    npk = list(set(npk1).intersection(set(npk2)).intersection(set(npk3)))
+                    #npk = npk3
+                    nevents += len(np.array(method.onsets)[npk])
+                    result.append(np.array(method.onsets)[npk])
+                    eventlist.append(tb[np.array(method.onsets)[npk]])
+                    tpks.append(np.array(method.peaks)[npk])
+                    smpks.append(np.array(method.smoothed_peaks)[npk])
+                    smpksindex.append(np.array(method.smpkindex)[npk])
+
+                    if method.averaged:  # grand average, calculated after deconvolution
+                        avgev.append(method.avgevent)
+                        avgtb.append(method.avgeventtb)
+                        avgnpts.append(method.avgnpts)
+                    else:
+                        avgev.append([])
+                        avgtb.append([])
+                        avgnpts.append(0)
+                    
+                    # define:
+                    # spont is not in evoked window, and no sooner than 10 msec before a stimulus,
+                    # at least 4*tau[0] after start of trace, and 5*tau[1] before end of trace
+                    # evoked is after the stimulus, in a window (usually ~ 5 msec)
+                    # data for events are aligned on the peak of the event, and go 4*tau[0] to 5*tau[1]
+                    # stimtimes: dict_keys(['start', 'duration', 'amplitude', 'npulses', 'period', 'type'])
+                    evtimes = np.array(self.stimtimes['start'])
+                    ok_events = np.array(method.smpkindex)[npk]
+                    npk_ev = self.select_events(ok_events, evtimes, 0.015, rate, mode='accept')
+                    ev_onsets = np.array(method.onsets)[npk_ev]
+                    avg_evoked_one, avg_evokedtb, allev_evoked = method.average_events(ev_onsets)
+                    fit_tau1.append(method.fitted_tau1)  # these are the average fitted values for the i'th trace
+                    fit_tau2.append(method.fitted_tau2)
+                    fit_amp.append(method.Amplitude)
+                    avg_evoked.append(avg_evoked_one)
+                    txb = avg_evokedtb  # only need one of these.
+                    if not np.isnan(method.fitted_tau1):
+                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(method.fitted_tau1*5), rate, mode='accept')
+                        sp_onsets = np.array(method.onsets)[npk_sp]
+                        avg_spont_one, avg_sponttb, allev_spont = method.average_events(sp_onsets)
+                        avg_spont.append(avg_spont_one)
+                    
+                    if testplots:
+                        method.plots(title='%d' % i, events=None)
+                  #  print ('eventlist: ', eventlist)
+    #                 else:
+    #                     res = cb.cbTemplateMatch(data.view(np.ndarray)[j, i, :jmax],
+    #                             template=cbtemplate, threshold=self.threshold, sign=self.sign)
+    #                     result.append(res)
+    #                     crit.append(cb.Crit)
+    #                     scale.append(cb.Scale)
+    #                     for r in res:
+    #                     #    print r
+    #                         if r[0] > 0.5:
+    #                             eventlist.append(r[0]*rate)
+    #                     if testplots:
+    # #                        print ('testplots')
+    #                         mpl.plot(tb, self.scale_factor*data.view(np.ndarray)[j, i, :], 'k-', linewidth=0.5)
+    #                         for k in range(len(res)):
+    #                             mpl.plot(tb[res[k][0]], self.scale_factor*data.view(np.ndarray)[j, i, res[k][0]], 'ro')
+    #                             mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate,
+    #                                      cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
+    #                         mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
                     'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
                     'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp}
@@ -521,7 +549,7 @@ class AnalyzeMap(object):
 
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
                'aj': aj, 'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset, 
-               'sign': self.sign, 'avg_tau1': aj.fitted_tau1, 'avg_tau2': aj.fitted_tau2, 'avg_amplitude': aj.Amplitude}
+               'sign': self.sign, 'avg_tau1': method.fitted_tau1, 'avg_tau2': method.fitted_tau2, 'avg_amplitude': method.Amplitude}
 
     def scale_and_rotate(self, poslist, sign=[1., 1.], scaleCorr=1., scale=1e6, autorotate=False, angle=0.):
         """ 
@@ -708,7 +736,7 @@ class AnalyzeMap(object):
                 amp = np.min(bfit)
             else:
                 amp = np.max(bfit)
-            txt = f"Amp: {Amplitude:.1f} [real: {scale*amp:.1f}] tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
+            txt = f"Amp: {scale*amp:.1f}] tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
             axt[iax].text(0.05, 0.95, txt, fontsize=7, transform=axt[iax].transAxes)
             axt[iax].plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
             axt[iax].plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
