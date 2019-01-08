@@ -386,7 +386,8 @@ class AnalyzeMap(object):
             for t in range(data.shape[1]):
                 data[r,t,:] = filtfunc(b, a, data[r, t, :] - np.mean(data[r, t, 0:250]))
                 if self.notch:
-                    data[r,t,:] = FILT.NotchFilter(data[r, t, :], notchf=self.notch_freqs, Q=120., QScale=True, samplefreq=samplefreq)
+                    #print('notching', self.notch_freqs)
+                    data[r,t,:] = FILT.NotchFilter(data[r, t, :], notchf=self.notch_freqs, Q=90., QScale=False, samplefreq=samplefreq)
         mdata = np.mean(data, axis=0)  # mean across ALL reps
 #        rate = rate*1e3  # convert rate to msec
         self.rate = rate
@@ -446,6 +447,7 @@ class AnalyzeMap(object):
                 fit_tau1 = []
                 fit_tau2 = []
                 fit_amp = []
+                spont_dur = []
                 
                 for i in range(data.shape[1]):  # all targets
                     if use_AJ:
@@ -472,10 +474,11 @@ class AnalyzeMap(object):
                     # filter out events at times of stimulus artifacts
                     pkt = method.smpkindex.copy()
                     npk1 = self.select_events(pkt, self.shutter_artifact, 2*rate, rate, mode='reject')
-                    npk2 = self.select_events(pkt, self.stimtimes['start'], np.array(self.stimtimes['duration'])+2.0*rate, rate, mode='reject')
+                    npk2 = self.select_events(pkt, self.stimtimes['start'], 2.0*rate*np.ones(len(self.stimtimes['start'])), rate, mode='reject') 
+                    #np.array(self.stimtimes['duration'])+2.0*rate, rate, mode='reject')
                     pulse_end = np.array(self.stimtimes['start'])+np.array(self.stimtimes['duration'])
 #                    npk3 = self.select_events(pkt, pulse_end, rate, rate, mode='threshold_reject', data=method.smoothed_peaks)
-                    npk3 = npk2 # self.select_events(pkt, pulse_end, rate, rate)
+                    npk3 = self.select_events(pkt, pulse_end, rate, rate)
                     npk = list(set(npk1).intersection(set(npk2)).intersection(set(npk3)))
                     if not self.artifact_suppress:
                         npk = npk1  # only suppress shutter artifacts
@@ -485,6 +488,7 @@ class AnalyzeMap(object):
                     tpks.append(np.array(method.peaks)[npk])
                     smpks.append(np.array(method.smoothed_peaks)[npk])
                     smpksindex.append(np.array(method.smpkindex)[npk])
+                    spont_dur.append(self.stimtimes['start'][0])  # window until the FIRST stimulus
 
                     if method.averaged:  # grand average, calculated after deconvolution
                         avgev.append(method.avgevent)
@@ -540,7 +544,7 @@ class AnalyzeMap(object):
     #                         mpl.show()
                 events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
                     'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
-                    'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp}
+                    'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': data.shape[1]}
         # print('analyze protocol returns, nevents = %d' % nevents)
             # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
             # if len(avevoked) > 0:
@@ -738,7 +742,10 @@ class AnalyzeMap(object):
                 amp = np.min(bfit)
             else:
                 amp = np.max(bfit)
-            txt = f"Amp: {scale*amp:.1f}] tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
+            txt = f"Amp: {scale*amp:.1f} tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
+            if evtype == 'avgspont':
+                srate = (float(ave.shape[0])/events[0]['spont_dur'][0])/events[0]['ntraces'] # dur should be same for all trials
+                txt += f"SR: {srate:.2f} Hz"
             axt[iax].text(0.05, 0.95, txt, fontsize=7, transform=axt[iax].transAxes)
             axt[iax].plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
             axt[iax].plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
