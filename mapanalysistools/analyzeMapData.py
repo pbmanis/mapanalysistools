@@ -15,17 +15,6 @@ For example:
 import sys
 import sqlite3
 import matplotlib
-matplotlib.use('MacOSX')
-#matplotlib.use('Agg')
-rcParams = matplotlib.rcParams
-rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
-rcParams['pdf.fonttype'] = 42
-rcParams['ps.fonttype'] = 42
-rcParams['text.latex.unicode'] = True
-#rcParams['font.family'] = 'sans-serif'
-rcParams['font.weight'] = 'regular'                  # you can omit this, it's the default
-#rcParams['font.sans-serif'] = ['Arial']
-
 import pyqtgraph.multiprocess as mp
 
 import argparse
@@ -211,6 +200,7 @@ class AnalyzeMap(object):
         self.scale_factor = 1 # scale factore for data (convert to pA or mV,,, )
         self.overlay_scale = 0.
         self.shutter_artifact = [0.055]
+        self.artifact_suppress = True
         self.stepi = 20.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
         self.rasterize = rasterize
@@ -241,6 +231,12 @@ class AnalyzeMap(object):
 
     def set_shutter_artifact_time(self, t):
         self.shutter_artifact = t
+    
+    def set_artifact_suppression(self, suppr=True):
+        if not isinstance(suppr, bool):
+            raise ValueError('analyzeMapData: artifact suppresion must be True or False')
+        self.artifact_suppress = suppr
+        
 
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
@@ -323,9 +319,9 @@ class AnalyzeMap(object):
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
-    def select_events(self, pkt, tstarts, twin, rate, mode='reject', firstonly=False):
+    def select_events(self, pkt, tstarts, twin, rate, mode='reject', thr=5e-12, data=None, firstonly=False):
         """
-        return indices where the input index is outside a set of time windows.
+        return indices where the input index is outside (or inside) a set of time windows.
         tstarts is a list of window starts
         twin is the duration of each window
         rate is the data sample rate (in msec...)
@@ -333,7 +329,7 @@ class AnalyzeMap(object):
         """
 
         # print('rate: ', rate)
-        if mode is 'reject':
+        if mode in ['reject', 'threshold_reject']:
             npk = list(range(len(pkt)))
         else:
             npk = []
@@ -351,6 +347,10 @@ class AnalyzeMap(object):
                 if mode is 'reject':
                     if pkt[k] >= t0 and pkt[k] <  te:
                         npk[k] = None
+                elif mode is 'threshold_reject' and data is not None:
+                    if (pkt[k] >= t0) and (pkt[k] <  te) and (np.fabs(data[k]) < thr):
+                        print('np.fabs: ', np.fabs(data[k]), thr)
+                        npk[k] = None
                 elif mode is 'accept':
                     if pkt[k] >= t0 and pkt[k] < te:
                         if k not in npk:
@@ -360,7 +360,7 @@ class AnalyzeMap(object):
                         break
                         
                 else:
-                    raise ValueError('analyzeMapData:select_times: mode must be accept or reject; got: ' % mode)
+                    raise ValueError('analyzeMapData:select_times: mode must be accept, threshold_reject, or reject; got: ' % mode)
         npk = [nk for nk in npk if nk is not None]
         return npk
 
@@ -474,9 +474,11 @@ class AnalyzeMap(object):
                     npk1 = self.select_events(pkt, self.shutter_artifact, 2*rate, rate, mode='reject')
                     npk2 = self.select_events(pkt, self.stimtimes['start'], np.array(self.stimtimes['duration'])+2.0*rate, rate, mode='reject')
                     pulse_end = np.array(self.stimtimes['start'])+np.array(self.stimtimes['duration'])
-                    npk3 = self.select_events(pkt, pulse_end, rate, rate, mode='reject')
+#                    npk3 = self.select_events(pkt, pulse_end, rate, rate, mode='threshold_reject', data=method.smoothed_peaks)
+                    npk3 = npk2 # self.select_events(pkt, pulse_end, rate, rate)
                     npk = list(set(npk1).intersection(set(npk2)).intersection(set(npk3)))
-                    #npk = npk3
+                    if not self.artifact_suppress:
+                        npk = npk1  # only suppress shutter artifacts
                     nevents += len(np.array(method.onsets)[npk])
                     result.append(np.array(method.onsets)[npk])
                     eventlist.append(tb[np.array(method.onsets)[npk]])
@@ -664,7 +666,7 @@ class AnalyzeMap(object):
                 facecolor='k', edgecolor='k', linewidth=0.5, histtype='stepfilled', align='right')
             self.plot_timemarker(axh)
             PH.nice_plot(axh, spines=['left', 'bottom'], position=-0.025, direction='outward', axesoff=False)
-            axh.set_xlim(0., self.AR.tstart-0.001)
+            axh.set_xlim(0., self.AR.tstart-0.005)
 
     def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None):
         if ax is None:
@@ -1075,6 +1077,18 @@ class AnalyzeMap(object):
         
  
 if __name__ == '__main__':
+    # these must be done here to avoid conflict when we import the class, versus
+    # calling directly for testing etc.
+    matplotlib.use('Agg')
+    rcParams = matplotlib.rcParams
+    rcParams['svg.fonttype'] = 'none' # No text as paths. Assume font installed.
+    rcParams['pdf.fonttype'] = 42
+    rcParams['ps.fonttype'] = 42
+    rcParams['text.latex.unicode'] = True
+    #rcParams['font.family'] = 'sans-serif'
+    rcParams['font.weight'] = 'regular'                  # you can omit this, it's the default
+    #rcParams['font.sans-serif'] = ['Arial']
+
     datadir = '/Volumes/PBM_004/data/MRK/Pyramidal'
     parser = argparse.ArgumentParser(description='mini synaptic event analysis')
     parser.add_argument('datadict', type=str,
