@@ -336,26 +336,27 @@ class AnalyzeMap(object):
         for itw, tw in enumerate(tstarts): # and for each stimulus
             first = False
             if isinstance(twin, list) or isinstance(twin, np.ndarray):  # either use array parallel to tstarts, or
-                ttwin = twin[itw]   
+                ttwin = twin[itw]
             else:
                 ttwin = twin  # or use just a single value
             for k in range(len(pkt)):
-                if mode is 'reject' and npk[k] is None:
+                if mode == 'reject' and npk[k] is None:
                     continue
                 t0 = int(tw/rate)
                 te = t0 + int(ttwin/rate)
-                if mode is 'reject':
+                if mode == 'reject':
                     if pkt[k] >= t0 and pkt[k] <  te:
                         npk[k] = None
-                elif mode is 'threshold_reject' and data is not None:
+                elif (mode == 'threshold_reject') and (data is not None):
                     if (pkt[k] >= t0) and (pkt[k] <  te) and (np.fabs(data[k]) < thr):
                         print('np.fabs: ', np.fabs(data[k]), thr)
                         npk[k] = None
-                elif mode is 'accept':
+                elif mode == 'accept':
+                  #  print(t0, pkt[k], te)
                     if pkt[k] >= t0 and pkt[k] < te:
                         if k not in npk:
                             npk.append(k)
-                    if not firstonly and not first:
+                    if firstonly and not first:
                         first = True
                         break
                         
@@ -505,9 +506,16 @@ class AnalyzeMap(object):
                     # evoked is after the stimulus, in a window (usually ~ 5 msec)
                     # data for events are aligned on the peak of the event, and go 4*tau[0] to 5*tau[1]
                     # stimtimes: dict_keys(['start', 'duration', 'amplitude', 'npulses', 'period', 'type'])
-                    evtimes = np.array(self.stimtimes['start'])
+                    st_times = np.array(self.stimtimes['start'])
                     ok_events = np.array(method.smpkindex)[npk]
-                    npk_ev = self.select_events(ok_events, evtimes, 0.015, rate, mode='accept')
+                   # print(ok_events*rate)
+
+                    win_end = 0.015
+                    # print(st_times, win_end)
+                    # print(ok_events*rate)
+                    npk_ev = self.select_events(ok_events, st_times, win_end, rate, mode='accept')
+                    #print('st_times: ', st_times)
+                    # print('ok_events: ', len(ok_events), 'evoke: ', len(npk_ev))
                     ev_onsets = np.array(method.onsets)[npk_ev]
                     avg_evoked_one, avg_evokedtb, allev_evoked = method.average_events(ev_onsets)
                     fit_tau1.append(method.fitted_tau1)  # these are the average fitted values for the i'th trace
@@ -516,7 +524,7 @@ class AnalyzeMap(object):
                     avg_evoked.append(avg_evoked_one)
                     txb = avg_evokedtb  # only need one of these.
                     if not np.isnan(method.fitted_tau1):
-                        npk_sp = self.select_events(ok_events, [0.], evtimes[0]-(method.fitted_tau1*5), rate, mode='accept')
+                        npk_sp = self.select_events(ok_events, [0.], st_times[0]-(method.fitted_tau1*5), rate, mode='accept')
                         sp_onsets = np.array(method.onsets)[npk_sp]
                         avg_spont_one, avg_sponttb, allev_spont = method.average_events(sp_onsets)
                         avg_spont.append(avg_spont_one)
@@ -696,7 +704,7 @@ class AnalyzeMap(object):
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
 
-    def plot_avgevent_traces(self, ax, events=None, scale=1.0):
+    def plot_avgevent_traces(self, ax, events=None, scale=1.0, label='pA'):
 
         nevtimes = 0
         line = {'avgevoked': 'r-', 'avgspont': 'k-'}
@@ -708,10 +716,10 @@ class AnalyzeMap(object):
         # set the bounding box of the twin axis to match the primary axis
         # bbox = axt[0].get_position()
         # axt[1].set_position(bbox)
-        axt[1].set_ylabel('Spont (pA)')
+        axt[1].set_ylabel('Spont (%s)'%label)
 
         axt[0].spines['left'].set_color('r')
-        axt[0].set_ylabel('Evoked (pA)')
+        axt[0].set_ylabel('Evoked (%s)'%label)
         axt[0].yaxis.label.set_color('r')
         axt[0].tick_params(axis='y', colors='r')
 
@@ -945,7 +953,6 @@ class AnalyzeMap(object):
         while avd.ndim > 1:
             avd = np.mean(avd, axis=0)
         avgd = avd # FILT.SignalFilter_LPFButter(avd, 10000., self.AR.sample_rate[0], NPole=8)
-        
         avglaser = np.mean(self.AR.LaserBlue_pCell, axis=0) # FILT.SignalFilter_LPFButter(np.mean(self.AR.LaserBlue_pCell, axis=0), 10000., self.AR.sample_rate[0], NPole=8)
         maxi = np.argmin(np.fabs(self.tb - 0.6))
 #        print('maxi: ', maxi)
@@ -1015,10 +1022,15 @@ class AnalyzeMap(object):
             results = self.last_results
         if results is None:
             return
-        if '_IC__' in str(dataset.name) or 'CC' in str(dataset.name):
-            scf = 1e3  # mV
-        else:
+        if '_IC_' in str(dataset.name) or 'CC' in str(dataset.name):
+            scf = 1e3
+            label = 'mV'  # mV
+        elif '_VC' in str(dataset.name):
             scf = 1e12 # pA, vc
+            label = 'pA'
+        else:
+            scf = 1.0
+            label = 'AU'
         # f, ax = mpl.subplots(2,2)
 #         ax = ax.ravel()
 #         for k, s in enumerate(['I_max', 'ZScore', 'Qr', 'Qb']):
@@ -1075,7 +1087,8 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
         self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])
-        self.plot_avgevent_traces([self.P.axdict['C1'], self.P.axdict['C2']], events=results['events'], scale=scf)
+        self.plot_avgevent_traces([self.P.axdict['C1'], self.P.axdict['C2']], events=results['events'],
+                                   scale=scf, label=label)
         
         if self.photodiode:
             self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
