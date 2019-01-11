@@ -433,7 +433,7 @@ class AnalyzeMap(object):
         nevents = 0
         if eventhist:
             tmaxev = np.max(tb) # msec
-            for j in range(data.shape[0]):  # all trials
+            for jtrial in range(data.shape[0]):  # all trials
                 result = []
                 crit = []
                 scale = []
@@ -449,13 +449,14 @@ class AnalyzeMap(object):
                 fit_tau2 = []
                 fit_amp = []
                 spont_dur = []
-                
-                for i in range(data.shape[1]):  # all targets
+                evoked_ev = []  # subsets that pass criteria
+                spont_ev = []
+                for itarget in range(data.shape[1]):  # all targets
                     if use_AJ:
                         jmax = int(tmaxev/rate)
                         aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                                 sign=self.sign, eventstartthr=eventstartthr)
-                        idata = data.view(np.ndarray)[j, i, :]
+                        idata = data.view(np.ndarray)[jtrial, itarget, :]
                         meandata = np.mean(idata[:jmax])
                         aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim, 
                                 thresh=self.threshold/5.0, llambda=10., order=7)
@@ -464,7 +465,7 @@ class AnalyzeMap(object):
                         jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
                         cb.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                                 sign=self.sign, eventstartthr=eventstartthr)
-                        idata = data.view(np.ndarray)[j, i, :]
+                        idata = data.view(np.ndarray)[jtrial, itarget, :]
                         meandata = np.mean(idata[:jmax])
                         res = cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
                         result.append(res)
@@ -473,16 +474,16 @@ class AnalyzeMap(object):
                         method = cb
                         
                     # filter out events at times of stimulus artifacts
-                    pkt = method.smpkindex.copy()
-                    npk1 = self.select_events(pkt, self.shutter_artifact, 2*rate, rate, mode='reject')
-                    npk2 = self.select_events(pkt, self.stimtimes['start'], 2.0*rate*np.ones(len(self.stimtimes['start'])), rate, mode='reject') 
+                    pkt = method.smpkindex.copy()  # get list of all event peak times
+                    npk1 = self.select_events(pkt, self.shutter_artifact, 2*rate, rate, mode='reject')  # reject shutter artifact
+                    npk2 = self.select_events(pkt, self.stimtimes['start'], 2.0*rate*np.ones(len(self.stimtimes['start'])), rate, mode='reject')  #reject stim on artifact
                     #np.array(self.stimtimes['duration'])+2.0*rate, rate, mode='reject')
                     pulse_end = np.array(self.stimtimes['start'])+np.array(self.stimtimes['duration'])
 #                    npk3 = self.select_events(pkt, pulse_end, rate, rate, mode='threshold_reject', data=method.smoothed_peaks)
-                    npk3 = self.select_events(pkt, pulse_end, rate, rate)
-                    npk = list(set(npk1).intersection(set(npk2)).intersection(set(npk3)))
+                    npk3 = self.select_events(pkt, pulse_end, rate, rate, mode='reject')  # reject stim off artifact
+                    npk = list(set(npk1).intersection(set(npk2)).intersection(set(npk3)))  # only all peaks that pass all tests
                     if not self.artifact_suppress:
-                        npk = npk1  # only suppress shutter artifacts
+                        npk = npk1  # only suppress shutter artifacts  .. excpetion
                     nevents += len(np.array(method.onsets)[npk])
                     result.append(np.array(method.onsets)[npk])
                     eventlist.append(tb[np.array(method.onsets)[npk]])
@@ -517,6 +518,7 @@ class AnalyzeMap(object):
                     #print('st_times: ', st_times)
                     # print('ok_events: ', len(ok_events), 'evoke: ', len(npk_ev))
                     ev_onsets = np.array(method.onsets)[npk_ev]
+                    evoked_ev.append(np.array(method.smpkindex)[npk_ev])
                     avg_evoked_one, avg_evokedtb, allev_evoked = method.average_events(ev_onsets)
                     fit_tau1.append(method.fitted_tau1)  # these are the average fitted values for the i'th trace
                     fit_tau2.append(method.fitted_tau2)
@@ -528,31 +530,17 @@ class AnalyzeMap(object):
                         sp_onsets = np.array(method.onsets)[npk_sp]
                         avg_spont_one, avg_sponttb, allev_spont = method.average_events(sp_onsets)
                         avg_spont.append(avg_spont_one)
+                        spont_ev.append(np.array(method.smpkindex)[npk_sp])
+                    else:
+                        spont_ev.append([])
                     
                     if testplots:
                         method.plots(title='%d' % i, events=None)
-                  #  print ('eventlist: ', eventlist)
-    #                 else:
-    #                     res = cb.cbTemplateMatch(data.view(np.ndarray)[j, i, :jmax],
-    #                             template=cbtemplate, threshold=self.threshold, sign=self.sign)
-    #                     result.append(res)
-    #                     crit.append(cb.Crit)
-    #                     scale.append(cb.Scale)
-    #                     for r in res:
-    #                     #    print r
-    #                         if r[0] > 0.5:
-    #                             eventlist.append(r[0]*rate)
-    #                     if testplots:
-    # #                        print ('testplots')
-    #                         mpl.plot(tb, self.scale_factor*data.view(np.ndarray)[j, i, :], 'k-', linewidth=0.5)
-    #                         for k in range(len(res)):
-    #                             mpl.plot(tb[res[k][0]], self.scale_factor*data.view(np.ndarray)[j, i, res[k][0]], 'ro')
-    #                             mpl.plot(tb[res[k][0]]+np.arange(len(cb.template))*rate,
-    #                                      cb.sign*cb.template*np.max(res['scale'][k]), 'b-')
-    #                         mpl.show()
-                events[j] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex,
+
+                events[jtrial] = {'criteria': crit, 'result': result, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex, 
                     'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
-                    'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': data.shape[1]}
+                    'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': data.shape[1],
+                    'evoked_ev': evoked_ev, 'spont_ev': spont_ev}
         # print('analyze protocol returns, nevents = %d' % nevents)
             # txb = np.arange(-4*self.taus[0], 5*self.taus[1], rate)
             # if len(avevoked) > 0:
@@ -692,6 +680,9 @@ class AnalyzeMap(object):
                             rasterized=self.rasterize, zorder=10)
                 if events is not None and j in list(events.keys()):
                     smpki = events[j]['smpksindex'][i]
+                    # for k in range(len(smpki)):
+                    #     if tb[smpki][k] < 0.6:
+                    #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
                     nevtimes += len(smpki)
                     if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
                         # The following plot call causes problems if done rasterized. 
@@ -704,61 +695,77 @@ class AnalyzeMap(object):
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
 
-    def plot_avgevent_traces(self, ax, events=None, scale=1.0, label='pA'):
+    def plot_avgevent_traces(self, evtype, mdata=None, events=None, ax=None, scale=1.0, label='pA'):
 
+        if events is None or ax is None:
+            return
         nevtimes = 0
         line = {'avgevoked': 'r-', 'avgspont': 'k-'}
-
-        if events is None:
-            return
-        axt = ax # 
-        # [ax, ax.twinx()]
-        # set the bounding box of the twin axis to match the primary axis
-        # bbox = axt[0].get_position()
-        # axt[1].set_position(bbox)
-        axt[1].set_ylabel('Spont (%s)'%label)
-
-        axt[0].spines['left'].set_color('r')
-        axt[0].set_ylabel('Evoked (%s)'%label)
-        axt[0].yaxis.label.set_color('r')
-        axt[0].tick_params(axis='y', colors='r')
-
-        for iax, evtype in enumerate(['avgevoked', 'avgspont']):
-            nev = 0
-            ave = []
-            tb = events[0]['aveventtb']
-            for i in range(len(events)):
-                for j, ev in enumerate(events[i][evtype]):
-                    if len(ev) == 0:
+        ltitle = {'avgevoked': 'Evoked (%s)'%label, 'avgspont': 'Spont (%s)'%label}
+        result_names = {'avgevoked': 'evoked_ev', 'avgspont': 'spont_ev'}
+            
+        ax.set_ylabel(ltitle[evtype])
+        ax.spines['left'].set_color(line[evtype][0])
+        ax.yaxis.label.set_color(line[evtype][0])
+        ax.tick_params(axis='y', colors=line[evtype][0], labelsize=7)
+        ax.tick_params(axis='x', colors=line[evtype][0], labelsize=7)
+        ev_min = 5e-12
+        sp_min = 5e-12
+        if evtype == 'avgevoked':
+            eventmin = ev_min
+        else:
+            eventmin = sp_min
+        ave = []
+        for trial in events.keys():
+           # print('  trail, len(events[trial][evtype]): ', trial, len(events[trial][evtype]))
+            tb0 = events[trial]['aveventtb']
+            rate = np.mean(np.diff(tb0))
+            tpre = 0.002 # 0.1*np.max(tb0)
+            tpost = np.max(tb0)
+            ipre = int(tpre/rate)
+            ipost = int(tpost/rate)
+            tb = np.arange(-tpre, tpost+rate, rate) + tpre
+            for itrace, evs in enumerate(events[trial][result_names[evtype]]):  # traces in the evtype lilst
+                bl = np.mean(mdata[trial, itrace, 0:(int(0.9*self.stimtimes['start'][0]/rate)-1)])
+                for jevent, ev in enumerate(evs):
+                    evdata = mdata[trial, itrace, ev-ipre:ev+ipost]-bl
+                    if evdata.shape[0] == 0:
                         continue
-                    nev += 1
-                    ave.append(ev)
-#            ave = [a for a in ave if not isinstance(a, list)]
-            ave = np.array(ave)
-            if ave.shape[0] == 0:
-                continue
-            tx = np.broadcast_to(tb, (ave.shape[0], tb.shape[0])).T
+                    if self.sign < 0 and np.min(evdata) > self.sign*eventmin:  # filter events by amplitude
+                        continue
+                    if self.sign >= 0 and np.max(evdata) < self.sign*eventmin:
+                        continue
+                    ave.append(evdata)
+                    ax.plot(tb[:len(evdata)], scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
 
-            self.MA.set_sign(self.sign)
-            self.MA.fit_average_event(tb, np.mean(ave, axis=0))
-            Amplitude = self.MA.fitresult[0]
-            tau1 = self.MA.fitresult[1]
-            tau2 = self.MA.fitresult[2]
-            bfdelay = self.MA.fitresult[3]
-            bfit = self.MA.avg_best_fit
-            if self.sign == -1:
-                amp = np.min(bfit)
-            else:
-                amp = np.max(bfit)
-            txt = f"Amp: {scale*amp:.1f} tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
-            if evtype == 'avgspont':
-                srate = (float(ave.shape[0])/events[0]['spont_dur'][0])/events[0]['ntraces'] # dur should be same for all trials
-                txt += f"SR: {srate:.2f} Hz"
-            axt[iax].text(0.05, 0.95, txt, fontsize=7, transform=axt[iax].transAxes)
-            axt[iax].plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
-            axt[iax].plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
-            axt[iax].plot(tb, scale*np.mean(ave, axis=0), line[evtype], linewidth=0.625, rasterized=self.rasterize)
-            axt[0].set_label(evtype)
+        nev = len(ave)
+        ave = np.array(ave)
+        if ave.shape[0] == 0:
+            return
+        tx = np.broadcast_to(tb, (ave.shape[0], tb.shape[0])).T
+
+        self.MA.set_sign(self.sign)
+        avedat = np.mean(ave, axis=0)
+        tb = tb[:len(avedat)]
+        self.MA.fit_average_event(tb, avedat)
+        Amplitude = self.MA.fitresult[0]
+        tau1 = self.MA.fitresult[1]
+        tau2 = self.MA.fitresult[2]
+        bfdelay = self.MA.fitresult[3]
+        bfit = self.MA.avg_best_fit
+        if self.sign == -1:
+            amp = np.min(bfit)
+        else:
+            amp = np.max(bfit)
+        txt = f"Amp: {scale*amp:.1f} tau1:{1e3*tau1:.2f} tau2: {1e3*tau2:.2f} (N={ave.shape[0]:d})"
+        if evtype == 'avgspont':
+            srate = (float(ave.shape[0])/events[0]['spont_dur'][0])/events[0]['ntraces'] # dur should be same for all trials
+            txt += f" SR: {srate:.2f} Hz"
+        ax.text(0.05, 0.95, txt, fontsize=7, transform=ax.transAxes)
+        # ax.plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
+        ax.plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
+        ax.plot(tb, scale*avedat, line[evtype], linewidth=0.625, rasterized=self.rasterize)
+            #ax.set_label(evtype)
 
     def plot_average_traces(self, ax, tb, mdata, color='k'):
         """
@@ -921,6 +928,8 @@ class AnalyzeMap(object):
         else:
             return vmaxin
 
+
+
     def fix_pd_artifact(self, data):
         """
         Hand tuned to minimize the transient and DC step from the PD signal - still leaves a bit of a fast
@@ -928,8 +937,9 @@ class AnalyzeMap(object):
         The algorithm is simple:
             1. average all the PD data to reduce nose
             2. calculate a high-pass filtered version of the PD signal to emulate the capacitative cross-talk
+            2b. Low pass filter the signal, same as the ephys data
             3. add (or subtract) a small amount of the PD signal to emulate the DC part of the cross-talk
-            4. subtract it from the data
+                Done by fitting the transient to get a scale.
         
         Problems:
         1. averaging all traces in CC can produce artifacts across all traces when spikes occur
@@ -937,51 +947,190 @@ class AnalyzeMap(object):
         Attempts to use the PD signal or shutter signal (filtered or not) didn't work.
         
         """
-        # meanpddata = self.AR.Photodiode.mean(axis=0)  # get the average PD signal that was recorded
-        # if meanpddata is not None:
-        #     Util = EP.Utility.Utility()
-        #     crosstalk = 0.365e-9*Util.SignalFilter_HPFBessel(meanpddata, 1900., self.AR.Photodiode_sample_rate[0], NPole=2, bidir=False)
-        #     # crosstalk -= 0.06e-9*meanpddata
-        #     crosstalk -= 0.1e-9*meanpddata
-        #     crosstalk = np.hstack((np.zeros(2), crosstalk[:-2]))
+        testplot = True
+
+        avgd = data.copy()
+        while avgd.ndim > 1:
+            avgd = np.mean(avgd, axis=0)
+        meanpddata = self.AR.Photodiode.mean(axis=0)  # get the average PD signal that was recorded
+        if meanpddata is not None:
+            Util = EP.Utility.Utility()
+            # filter the PD data - low pass to match data; high pass for apparent oupling
+            crosstalk = Util.SignalFilter_HPFBessel(meanpddata, 2100., self.AR.Photodiode_sample_rate[0], NPole=1, bidir=False)
+            crosstalk = Util.SignalFilter_LPFBessel(crosstalk, self.LPF, self.AR.Photodiode_sample_rate[0], NPole=1, bidir=False)
+            crosstalk -= np.mean(meanpddata[0:int(0.010*self.AR.Photodiode_sample_rate[0])])
+            crosstalk = np.hstack((np.zeros(1), crosstalk[:-1]))
+        else:
+            return data, avgd
         # if self.shutter is not None:
         #     crossshutter = 0* 0.365e-21*Util.SignalFilter_HPFBessel(self.shutter['data'][0], 1900., self.AR.Photodiode_sample_rate[0], NPole=2, bidir=False)
         #     crosstalk += crossshutter
-        
-        testplot = False
-        avd = data.copy()
-        while avd.ndim > 1:
-            avd = np.mean(avd, axis=0)
-        avgd = avd # FILT.SignalFilter_LPFButter(avd, 10000., self.AR.sample_rate[0], NPole=8)
+        strt_time_indx = int(np.array(self.stimtimes['start'][0])*self.AR.Photodiode_sample_rate[0])
+        send_time_indx = strt_time_indx + int(0.005*self.AR.Photodiode_sample_rate[0]) # 5 msec later
         avglaser = np.mean(self.AR.LaserBlue_pCell, axis=0) # FILT.SignalFilter_LPFButter(np.mean(self.AR.LaserBlue_pCell, axis=0), 10000., self.AR.sample_rate[0], NPole=8)
         maxi = np.argmin(np.fabs(self.tb - 0.6))
-#        print('maxi: ', maxi)
-        scf, intcept = np.polyfit(avglaser[:maxi], avgd[:maxi], 1)
-        avglaserd = np.mean(self.AR.LaserBlue_pCell, axis=0)
+        fitx = crosstalk[strt_time_indx:send_time_indx]-np.mean(crosstalk)
+        ifitx = [f[0]+strt_time_indx for f in np.argwhere((fitx > 1e-4) | (fitx < -1e-4))]
+        wmax = np.max(np.fabs(crosstalk[ifitx]))
+        weights = np.sqrt(np.fabs(crosstalk[ifitx])/wmax)
+        scf, intcept = np.polyfit(crosstalk[ifitx], avgd[ifitx], 1, w=weights)
+        avglaserd = meanpddata # np.mean(self.AR.LaserBlue_pCell, axis=0)
+
 #        print(scf, intcept)
-        lbr = avglaserd*scf + intcept
+        lbr = scf*crosstalk
         datar = np.zeros_like(data)
         for i in range(data.shape[0]):
-            datar[i,:] = data[i,:] - lbr # - avd
+            datar[i,:] = data[i,:] - 1.25*lbr
         if testplot:
+            from pyqtgraph.Qt import QtGui, QtCore
             import pyqtgraph as pg
-            app = pg.QtGui.QApplication(sys.argv)
-            win = pg.GraphicsWindow()
+            app = QtGui.QApplication([])
+            win = pg.GraphicsLayoutWidget(show=True, title="Basic plotting examples")
+            win.resize(1000,600)
+            win.setWindowTitle('pyqtgraph example: Plotting')
+            # Enable antialiasing for prettier plots
+            pg.setConfigOptions(antialias=True)
             p1 = win.addPlot(0, 0)
             p2 = win.addPlot(1, 0)
             p3 = win.addPlot(2, 0)
+            p1r = win.addPlot(0,1)
+            lx = np.linspace(np.min(crosstalk[ifitx]), np.max(crosstalk[ifitx]), 50)
+            sp = pg.ScatterPlotItem(crosstalk[ifitx], avgd[ifitx])  # plot regression over points
+            ly = scf*lx + intcept
+            p1r.addItem(sp)
+            p1r.plot(lx, ly, pen=pg.mkPen('r', width=0.75))
             for i in range(10):
-                p1.plot(self.tb, data[0,i,:], pen=pg.mkPen('r'))
-                p1.plot(self.tb, datar[0,i,:], pen=pg.mkPen('g'))
-            p1.plot(self.tb, avd, pen=pg.mkPen('w'))
+                p1.plot(self.tb, data[0,i,:]+2e-11*i, pen=pg.mkPen('r'))
+                p1.plot(self.tb, datar[0,i,:]+2e-11*i, pen=pg.mkPen('g'))
             p1.plot(self.tb, lbr, pen=pg.mkPen('c'))
-            p2.plot(self.tb, avglaser, pen=pg.mkPen('m'))
+            p2.plot(self.tb, crosstalk, pen=pg.mkPen('m'))
+            p2.setXLink(p1)
+            p3.setXLink(p1)
+            p3.plot(self.tb, avgd, pen=pg.mkPen('w', width=1.0))
             p3.plot(self.tb, np.mean(datar[0], axis=0), pen=pg.mkPen('y'))
-            sys.exit(app.exec_())
+            p2.setXLink(p1)
+            p3.setXLink(p1)
+            if (sys.flags.interactive != 1) or not hasattr(QtCore, 'PYQT_VERSION'):
+                QtGui.QApplication.instance().exec_()
             exit()
 #        print('dmax: ', np.max(np.max(datar)))
 #        print('dmin: ', np.min(np.min(datar)))
-        return(datar, avd)
+        return datar, avgd
+
+    def fit_transient(self, p, x, y=None, pole1=1, pole2=1, idt=0, rate=None):
+        scf = p[0]
+        hpf_freq = p[1]*1e3  # to keep numbers scaled near 1, we use kHz and msec
+        lpf_freq = p[2]*1e3
+        tshift = p[3]*1e-3
+        Util = EP.Utility.Utility()
+        crosstalk = scf*x
+        # filter the PD data - low pass to match data; high pass for apparent coupling
+        crosstalk = Util.SignalFilter_HPFBessel(crosstalk, hpf_freq, rate, NPole=pole1, bidir=False)
+        crosstalk = Util.SignalFilter_LPFBessel(crosstalk, lpf_freq, rate, NPole=pole2, bidir=False)
+        if idt > 0:
+            crosstalk = np.hstack((np.zeros(idt), crosstalk[:-idt]))
+        # tx = np.arange(0., len(crosstalk)/rate, 1./rate)
+        # # try time shifting
+        # newx = tx + tshift
+        # crosstalk = np.interp(newx, tx, crosstalk, left=crosstalk[0], right=crosstalk[-1])
+
+        if y is None:
+            return crosstalk
+        else:
+            return np.sum(np.fabs(y-crosstalk))
+        
+
+    def fix_pd_artifact_2(self, data):
+        """
+        Hand tuned to minimize the transient and DC step from the PD signal - still leaves a bit of a fast
+        transient (obviously the filter shape is not quite correct)
+        The algorithm is simple:
+            1. average all the PD data to reduce nose
+            2. calculate a high-pass filtered version of the PD signal to emulate the capacitative cross-talk
+            2b. Low pass filter the signal, same as the ephys data
+            3. add (or subtract) a small amount of the PD signal to emulate the DC part of the cross-talk
+                Done by fitting the transient to get a scale.
+        
+        Problems:
+        1. averaging all traces in CC can produce artifacts across all traces when spikes occur
+        2. averaging all traces in VC can reduce response amplitudes when there are lots of responses... 
+        Attempts to use the PD signal or shutter signal (filtered or not) didn't work.
+        
+        """
+        testplot = True
+
+        avgd = data.copy()
+        while avgd.ndim > 1:
+            avgd = np.mean(avgd, axis=0)
+        meanpddata = self.AR.Photodiode.mean(axis=0)  # get the average PD signal that was recorded
+        if meanpddata is None:
+            return data, avgd
+        rate = self.AR.Photodiode_sample_rate[0]
+        meanpddata = meanpddata-np.mean(meanpddata[0:int(0.01*rate)])
+        strt_time_indx = int(np.array(self.stimtimes['start'][0])*rate)
+        send_time_indx = strt_time_indx + int(0.002*rate) # 5 msec later
+
+        fitx = meanpddata[strt_time_indx:send_time_indx]
+        ifitx = [f[0]+strt_time_indx for f in np.argwhere((fitx > 1e-4) | (fitx < -1e-4))]
+        pole1 = 1
+        pole2 = 4
+        idt = 1
+        scf = 1
+        tshift = 0.
+        pars = [scf, 0.3, 2.5, tshift]
+        relscale = 1./np.max(meanpddata[ifitx])/np.max(avgd[ifitx])
+        print(f'relscale: {relscale:.3e}')
+        bounds = [(-1e4, 1e4), (0.1, 2.), (2., 1e-3*rate*0.45), (-1, 1)]
+        fpar = scipy.optimize.minimize(self.fit_transient, pars, method='TNC', bounds=bounds,
+                args=(meanpddata[ifitx], relscale*avgd[ifitx], pole1, pole2, idt, rate),
+                options={'eps': 1e-6, 'maxiter': 10000})
+        print(fpar)
+        crosstalk = (1./relscale)*self.fit_transient(fpar.x, meanpddata, y=None, pole1=pole1, pole2=pole2, idt=idt, rate=rate)
+
+        datar = np.zeros_like(data)
+        for i in range(data.shape[0]):
+            datar[i,:] = data[i,:] - crosstalk
+        if testplot:
+            from pyqtgraph.Qt import QtGui, QtCore
+            import pyqtgraph as pg
+            app = QtGui.QApplication([])
+            win = pg.GraphicsLayoutWidget(show=True, title="Basic plotting examples")
+            win.resize(1000,600)
+            win.setWindowTitle('pyqtgraph example: Plotting')
+            # Enable antialiasing for prettier plots
+            pg.setConfigOptions(antialias=True)
+            p1 = win.addPlot(0, 0)
+            p2 = win.addPlot(1, 0)
+            p3 = win.addPlot(2, 0)
+            p1r = win.addPlot(0,1)
+            p2r = win.addPlot(1,1)
+            # print(ifitx)
+            # print(meanpddata[ifitx])
+            # print(avgd[ifitx])
+            p2r.plot(self.tb[ifitx], meanpddata[ifitx]*fpar.x[0], pg.mkPen('b'))
+            p2r.plot(self.tb[ifitx], avgd[ifitx], pg.mkPen('w'))
+            sp = pg.ScatterPlotItem(crosstalk[ifitx], avgd[ifitx])  # plot regression over points
+            p1r.addItem(sp)
+            # lx = np.linspace(np.min(crosstalk[ifitx]), np.max(crosstalk[ifitx]), 50)
+            # ly = scf*lx + intcept
+            # p1r.plot(lx, ly, pen=pg.mkPen('r', width=0.75))
+            for i in range(10):
+                p1.plot(self.tb, data[0,i,:]+2e-11*i, pen=pg.mkPen('r'))
+                p1.plot(self.tb, datar[0,i,:]+2e-11*i, pen=pg.mkPen('g'))
+            p1.plot(self.tb, crosstalk, pen=pg.mkPen('c'))
+            p2.plot(self.tb, crosstalk, pen=pg.mkPen('m'))
+            p2.setXLink(p1)
+            p3.setXLink(p1)
+            p3.plot(self.tb, avgd, pen=pg.mkPen('r', width=1.0))
+            p3.plot(self.tb, np.mean(datar[0], axis=0), pen=pg.mkPen('y'))
+            p2.setXLink(p1)
+            p3.setXLink(p1)
+            if (sys.flags.interactive != 1) or not hasattr(QtCore, 'PYQT_VERSION'):
+                QtGui.QApplication.instance().exec_()
+            exit()
+#        print('dmax: ', np.max(np.max(datar)))
+#        print('dmin: ', np.min(np.min(datar)))
+        return datar, avgd
 
     def analyze_one_map(self, dataset, plotevents=False):
        # print('ANALYZE ONE MAP')
@@ -1063,7 +1212,7 @@ class AnalyzeMap(object):
 
         self.P = PH.Plotter(self.plotspecs, label=False, figsize=(10., 8.))
 
-        self.plot_events(self.P.axdict['B'], results)
+        self.plot_events(self.P.axdict['B'], results)  # PSTH
         if imagefile is not None:
             self.MT.get_image(imagefile)
             self.MT.load_images()
@@ -1086,9 +1235,12 @@ class AnalyzeMap(object):
             self.newvmax = self.overlay_scale
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
-        self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])
-        self.plot_avgevent_traces([self.P.axdict['C1'], self.P.axdict['C2']], events=results['events'],
-                                   scale=scf, label=label)
+        self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])  # stacked on right
+        
+        self.plot_avgevent_traces(evtype='avgevoked', mdata=self.data_clean, ax=self.P.axdict['C1'], 
+                events=results['events'], scale=scf, label=label)
+        self.plot_avgevent_traces(evtype='avgspont', mdata=self.data_clean, ax=self.P.axdict['C2'], 
+                events=results['events'], scale=scf, label=label)
         
         if self.photodiode:
             self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
