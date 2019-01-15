@@ -259,7 +259,10 @@ class AnalyzeMap(object):
             for j in range(len(self.stimtimes['start'])):
                 self.twin_resp.append([self.stimtimes['start'][j]+self.direct_window, self.stimtimes['start'][j]+self.response_window])
         self.lbr_command = self.AR.getLaserBlueCommand() # just get flag; data in self.AR
-        self.photodiode = self.AR.getPhotodiode()
+        try:
+            self.photodiode = self.AR.getPhotodiode()
+        except:
+            pass
         self.shutter = self.AR.getDeviceData('Laser-Blue-raw', 'Shutter')
         self.AR.getScannerPositions()
         data = np.reshape(self.AR.traces, (self.AR.repetitions, self.AR.traces.shape[0], self.AR.traces.shape[1]))
@@ -319,7 +322,7 @@ class AnalyzeMap(object):
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
-    def select_events(self, pkt, tstarts, tdurs, rate, mode='reject', thr=5e-12, data=None, firstonly=False):
+    def select_events(self, pkt, tstarts, tdurs, rate, mode='reject', thr=5e-12, data=None, first_only=False):
         """
         return indices where the input index is outside (or inside) a set of time windows.
         tstarts is a list of window starts
@@ -353,10 +356,10 @@ class AnalyzeMap(object):
                         npk[k] = None
                 elif mode == 'accept':
                   #  print(t0, pkt[k], te)
-                    if pk >= ts and pk < te:
+                    if pk >= ts and pk < te and not first:
                         if k not in npk:
                             npk.append(k)
-                    if firstonly and not first:
+                    if first_only and not first:
                         first = True
                         break
                         
@@ -566,7 +569,7 @@ class AnalyzeMap(object):
                         idata = data.view(np.ndarray)[jtrial, itarget, :]
                         meandata = np.mean(idata[:jmax])
                         aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim, 
-                                thresh=self.threshold, llambda=10., order=7)
+                                thresh=self.threshold/5., llambda=10., order=7)  # note threshold scaling... 
                         method = aj
                     else:
                         jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
@@ -625,7 +628,7 @@ class AnalyzeMap(object):
                    # print(ok_events*rate)
 
                     win_end = 0.015
-                    npk_ev = self.select_events(ok_events, st_times, win_end, rate, mode='accept')
+                    npk_ev = self.select_events(ok_events, st_times, win_end, rate, mode='accept', first_only=True)
 
                     ev_onsets = np.array(method.onsets)[npk_ev]
                     evoked_ev.append([np.array(method.onsets)[npk_ev], np.array(method.smpkindex)[npk_ev]])
@@ -826,7 +829,7 @@ class AnalyzeMap(object):
                     evdata = mdata[trial, itrace, evs[0][jevent]-ipre:evs[0][jevent]+ipost].copy()  # 0 is onsets
                     if evdata.shape[0] == 0:
                         continue
-                    bl = np.mean(evdata[:ptfivems])
+                    bl = np.mean(evdata[ipre-ptfivems:ipre])
                     evdata -= bl
                     ave.append(evdata)
                     ax.plot(tb[:len(evdata)], scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
