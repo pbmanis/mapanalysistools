@@ -322,7 +322,7 @@ class AnalyzeMap(object):
         mpost = np.max(sign*data[trindx]) # response goes negative... 
         return(mpost)
 
-    def select_events(self, pkt, tstarts, tdurs, rate, mode='reject', thr=5e-12, data=None, first_only=False):
+    def select_events(self, pkt, tstarts, tdurs, rate, mode='reject', thr=5e-12, data=None, first_only=False, debug=False):
         """
         return indices where the input index is outside (or inside) a set of time windows.
         tstarts is a list of window starts
@@ -355,16 +355,21 @@ class AnalyzeMap(object):
                         print('np.fabs: ', np.fabs(data[k]), thr)
                         npk[k] = None
                 elif mode == 'accept':
-                  #  print(t0, pkt[k], te)
+                    if debug:
+                        print('accepting ?: ', ts, k, pk, te, rate)
                     if pk >= ts and pk < te and not first:
+                        if debug:
+                            print('    ok')
                         if k not in npk:
                             npk.append(k)
-                    if first_only and not first:
-                        first = True
-                        break
+                        if first_only and not first:
+                            first = True
+                            break
                         
                 else:
                     raise ValueError('analyzeMapData:select_times: mode must be accept, threshold_reject, or reject; got: %s' % mode)
+        if debug:
+            print('npk: ', npk)
         npks = [n for n in npk if n is not None]  # return the truncated list of indices into pkt
         return npks
         
@@ -591,15 +596,23 @@ class AnalyzeMap(object):
                     art_durs = [2, 2*rate]
                     for si, s in enumerate(self.stimtimes['start']):
                         art_starts.append(s)
-                        art_starts.append(s+self.stimtimes['duration'][si])
+                        if isinstance(self.stimtimes['duration'], float):
+                            art_starts.append(s+self.stimtimes['duration'])
+                        else:
+                            art_starts.append(s+self.stimtimes['duration'][si])
                         art_durs.append(2*rate)
                         art_durs.append(2*rate)
                     npk0 = self.select_events(method.smpkindex, art_starts, art_durs, rate, mode='reject')
                     npk4 = self.select_by_sign(method, npk0, idata, min_event=5e-12)  # events must also be of correct sign and min magnitude
- 
                     npk = list(set(npk0).intersection(set(npk4))) # only all peaks that pass all tests
                     if not self.artifact_suppress:
                         npk = npk4  # only suppress shutter artifacts  .. exception
+                    # if itarget < 2:
+                    #     print(self.stimtimes['start'])
+                    #     print(self.stimtimes['duration'])
+                    #     print('npk0: ', npk0)
+                    #     print('npk: ', npk)
+                    #     print('npk4: ', npk4)
                     nevents += len(np.array(method.onsets)[npk])
                     result.append(np.array(method.onsets)[npk])
                     eventlist.append(tb[np.array(method.onsets)[npk]])
@@ -629,7 +642,6 @@ class AnalyzeMap(object):
 
                     win_end = 0.015
                     npk_ev = self.select_events(ok_events, st_times, win_end, rate, mode='accept', first_only=True)
-
                     ev_onsets = np.array(method.onsets)[npk_ev]
                     evoked_ev.append([np.array(method.onsets)[npk_ev], np.array(method.smpkindex)[npk_ev]])
                     avg_evoked_one, avg_evokedtb, allev_evoked = method.average_events(ev_onsets)
@@ -829,7 +841,7 @@ class AnalyzeMap(object):
                     evdata = mdata[trial, itrace, evs[0][jevent]-ipre:evs[0][jevent]+ipost].copy()  # 0 is onsets
                     if evdata.shape[0] == 0:
                         continue
-                    bl = np.mean(evdata[ipre-ptfivems:ipre])
+                    bl = np.mean(evdata[0:ipre-ptfivems])
                     evdata -= bl
                     ave.append(evdata)
                     ax.plot(tb[:len(evdata)], scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
