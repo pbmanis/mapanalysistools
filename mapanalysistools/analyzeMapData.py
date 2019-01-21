@@ -868,7 +868,7 @@ class AnalyzeMap(object):
         tb = tb[:len(avedat)]
         avebl = np.mean(avedat[:ptfivems])
         avedat = avedat - avebl
-        self.MA.fit_average_event(tb, avedat, debug=False)
+        self.MA.fit_average_event(tb, avedat, debug=False, label='Map average')
         Amplitude = self.MA.fitresult[0]
         tau1 = self.MA.fitresult[1]
         tau2 = self.MA.fitresult[2]
@@ -1079,14 +1079,14 @@ class AnalyzeMap(object):
             if protocol.find('_VC_10Hz') > 0:
                 template_file = 'template_data_map_10Hz.pkl'
                 ptype = '10Hz'
-            elif protocol.find('_Single') > 0:
+            elif protocol.find('_Single') > 0 or (protocol.find('_weird') > 0) or (protocol.find('_WCChR2')) > 0:
                 template_file = 'template_data_map_Singles.pkl'
                 ptype = 'single'
         else:
             template_file = self.template_file
             if protocol.find('_VC_10Hz') > 0:
                 ptype = '10Hz'
-            elif protocol.find('_Single') > 0:
+            elif protocol.find('_Single') > 0 or protocol.find('_weird') > 0 or (protocol.find('_WCChR2')) > 0:
                 ptype = 'single'        
         if ptype is None:
             lbr = np.zeros_like(avgd)
