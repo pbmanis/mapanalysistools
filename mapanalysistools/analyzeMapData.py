@@ -194,6 +194,7 @@ class AnalyzeMap(object):
         # set some defaults - these will be overwrittein with readProtocol
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
+        self.maxtime = 0.599
        # self.taus = [0.5, 2.0]
         self.taus = [0.0002, 0.005]
         self.threshold = 3.0
@@ -640,7 +641,7 @@ class AnalyzeMap(object):
         # build array of artifact times first 
         art_starts = []
         art_durs = []
-        art_starts = [0.599, self.shutter_artifact]
+        art_starts = [self.maxtime, self.shutter_artifact]
         art_durs = [2, 2*rate]
         for si, s in enumerate(self.stimtimes['start']):
             art_starts.append(s)
@@ -804,11 +805,13 @@ class AnalyzeMap(object):
         idn = 0
         self.newvmax = None
         eventtimes = []
+        events = results['events']
         tb0 = events[0][0]['aveventtb']  # get from first trace in first trial
         rate = np.mean(np.diff(tb0))
-        for itrial in results.keys():
-            for jtrace in results[itrial]:
-                eventtimes.append(results[itrial][jtrace])
+        for itrial in events.keys():
+            for jtrace in events[itrial]:
+
+                eventtimes.extend(events[itrial][jtrace]['onsets'])
         # try:
         #     len(results['eventtimes'])
         # except:
@@ -822,7 +825,8 @@ class AnalyzeMap(object):
 #             for xn in eventtimes:
 #                 nevents += len(xn)
 #                 y.extend(xn)
-            y = np.array(eventtimes)*tb0
+
+            y = np.array(eventtimes)*np.mean(np.diff(tb0))
             bins = np.linspace(0., self.AR.tstart, int(self.AR.tstart*1000/2.0)+1)
             axh.hist(y, bins=bins,
                 facecolor='k', edgecolor='k', linewidth=0.5, histtype='stepfilled', align='right')
@@ -1152,7 +1156,7 @@ class AnalyzeMap(object):
             #     crossshutter = 0* 0.365e-21*Util.SignalFilter_HPFBessel(self.shutter['data'][0], 1900., self.AR.Photodiode_sample_rate[0], NPole=2, bidir=False)
             #     crosstalk += crossshutter
 
-            maxi = np.argmin(np.fabs(self.tb - 0.6))
+            maxi = np.argmin(np.fabs(self.tb - self.maxtime))
             ifitx = []
             art_times = np.array(self.stimtimes['start'])
             # artifact are:
@@ -1194,7 +1198,7 @@ class AnalyzeMap(object):
             # derivative=based artifact suppression - for what might be left
             # just for fast artifacts
             print('Derivative-based artifact suppression is ON')
-            itmax = int(0.599/dt)
+            itmax = int(self.maxtime/dt)
             avgdr = datar.copy()
             olddatar = datar.copy()
             while olddatar.ndim > 1:
@@ -1321,6 +1325,9 @@ class AnalyzeMap(object):
         elif '_VC' in str(dataset.name):
             scf = 1e12 # pA, vc
             label = 'pA'
+        elif 'VGAT_5ms' in str(dataset.name):
+            scf = 1e12
+            label = 'pA'
         else:
             scf = 1.0
             label = 'AU'
@@ -1380,7 +1387,7 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
         self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])  # stacked on right
-        
+
         self.plot_avgevent_traces(evtype='avgevoked', mdata=self.data_clean, ax=self.P.axdict['C1'], 
                 events=results['events'], scale=scf, label=label)
         self.plot_avgevent_traces(evtype='avgspont', mdata=self.data_clean, ax=self.P.axdict['C2'], 
