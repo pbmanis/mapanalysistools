@@ -264,6 +264,7 @@ class AnalyzeMap(object):
             self.stepi = 2.0
         else:
             self.stepi = 20.0
+
         self.stimtimes = self.AR.getBlueLaserTimes()
         if self.stimtimes is not None:
             self.twin_base = [0., self.stimtimes['start'][0] - 0.001]  # remember times are in seconds
@@ -509,8 +510,7 @@ class AnalyzeMap(object):
         data_nostim is a list of points where the stimulus/response DOES NOT occur, so we can compute the SD
         for the threshold in a consistent manner if there are evoked responses in the trace.
         """
-        if self.methodname == 'aj':
-            self.use_AJ = True
+
         data = self.filter_data(tb, data)
         rate = self.rate
         mdata = np.mean(data, axis=0)  # mean across ALL reps
@@ -567,7 +567,7 @@ class AnalyzeMap(object):
 
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
                'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset, 
-               'sign': self.sign, 'avgevents': avgevents}
+               'sign': self.sign, 'avgevents': avgevents, 'rate': rate}
 
     def analyze_one_trial(self, data, pars=None):
 
@@ -614,7 +614,7 @@ class AnalyzeMap(object):
         order = []
         nevents = 0
         
-        if self.use_AJ:
+        if self.methodname == 'aj':
             aj = minis_methods.AndradeJonas()
             jmax = int(tmaxev/rate)
             aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
@@ -632,9 +632,9 @@ class AnalyzeMap(object):
             idata = data.view(np.ndarray)[jtrial, itarget, :]
             meandata = np.mean(idata[:jmax])
             res = cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
-            result.append(res)
-            crit.append(cb.Crit)
-            scale.append(cb.Scale)
+            # result.append(res)
+            # crit.append(cb.Crit)
+            # scale.append(cb.Scale)
             method = cb
     
         # filter out events at times of stimulus artifacts
@@ -644,6 +644,8 @@ class AnalyzeMap(object):
         art_starts = [self.maxtime, self.shutter_artifact]
         art_durs = [2, 2*rate]
         for si, s in enumerate(self.stimtimes['start']):
+            if s in art_starts:
+                continue
             art_starts.append(s)
             if isinstance(self.stimtimes['duration'], float):
                 art_starts.append(s+self.stimtimes['duration'])
@@ -806,18 +808,23 @@ class AnalyzeMap(object):
         self.newvmax = None
         eventtimes = []
         events = results['events']
+        rate = results['rate']
         tb0 = events[0][0]['aveventtb']  # get from first trace in first trial
-        rate = np.mean(np.diff(tb0))
+        # rate = np.mean(np.diff(tb0))
+        nev = 0  # first count up events
         for itrial in events.keys():
             for jtrace in events[itrial]:
-
-                eventtimes.extend(events[itrial][jtrace]['onsets'])
-        # try:
-        #     len(results['eventtimes'])
-        # except:
-        #     print('There were no results/eventtimes to plot')
-        #     return
-
+                nev += len(events[itrial][jtrace]['onsets'][0])
+        eventtimes = np.zeros(nev)
+        iev = 0
+        for itrial in events.keys():
+            for jtrace in events[itrial]:
+                ntrialev = len(events[itrial][jtrace]['onsets'][0])
+                # print(events[itrial][jtrace]['onsets'][0])
+                # print(iev, iev+ntrialev, eventtimes.shape, ntrialev)
+                eventtimes[iev:iev+ntrialev] = events[itrial][jtrace]['onsets'][0]
+                iev += ntrialev
+        
         if plotevents and len(eventtimes) > 0:
             nevents = 0
 #             y=[]
@@ -826,7 +833,8 @@ class AnalyzeMap(object):
 #                 nevents += len(xn)
 #                 y.extend(xn)
 
-            y = np.array(eventtimes)*np.mean(np.diff(tb0))
+            y = np.array(eventtimes)*rate
+            print('AR Tstart: ', self.AR.tstart, y.shape)
             bins = np.linspace(0., self.AR.tstart, int(self.AR.tstart*1000/2.0)+1)
             axh.hist(y, bins=bins,
                 facecolor='k', edgecolor='k', linewidth=0.5, histtype='stepfilled', align='right')
@@ -1319,14 +1327,11 @@ class AnalyzeMap(object):
             results = self.last_results
         if results is None:
             return
-        if '_IC_' in str(dataset.name) or 'CC' in str(dataset.name):
+        if '_IC_' in str(dataset.name) or 'CC' in str(dataset.name) or self.datatype == 'I':
             scf = 1e3
             label = 'mV'  # mV
-        elif '_VC' in str(dataset.name):
+        elif '_VC' in str(dataset.name) or 'VGAT_5ms' in str(dataset.name) or self.datatype == 'V':
             scf = 1e12 # pA, vc
-            label = 'pA'
-        elif 'VGAT_5ms' in str(dataset.name):
-            scf = 1e12
             label = 'pA'
         else:
             scf = 1.0
