@@ -208,7 +208,7 @@ class AnalyzeMap(object):
         self.template_file = None
         self.stepi = 20.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
-        self.rasterize = rasterize
+        self.rasterized = rasterize
         self.methodname = 'aj'  # default event detector
         self.colors = {'red': '\x1b[31m', 'yellow': '\x1b[33m', 'green': '\x1b[32m', 'magenta': '\x1b[35m',
               'blue': '\x1b[34m', 'cyan': '\x1b[36m' , 'white': '\x1b[0m', 'backgray': '\x1b[100m'}
@@ -220,6 +220,9 @@ class AnalyzeMap(object):
     
     def set_LPF(self, LPF):
         self.LPF = LPF
+    
+    def set_rasterized(self, rasterized=False):
+        self.rasterized = rasterized
 
     def set_methodname(self, methodname):
         if methodname in ['aj', 'AJ']:
@@ -241,6 +244,7 @@ class AnalyzeMap(object):
         if not isinstance(suppr, bool):
             raise ValueError('analyzeMapData: artifact suppresion must be True or False')
         self.artifact_suppress = suppr
+        self.fix_artifact_flag = suppr
 
     def set_noderivative_artifact(self, suppr=True):
         if not isinstance(suppr, bool):
@@ -575,12 +579,19 @@ class AnalyzeMap(object):
         tasks = range(data.shape[1])  # number of tasks that will be needed
         result = [None] * len(tasks)  # likewise
         results = {}
+        # if not self.noparallel:
         with mp.Parallelize(enumerate(tasks), results=results, workers=nworkers) as tasker:
             for itarget, x in tasker:
                 result = self.analyze_one_trace(data, itarget, pars=pars)
                 tasker.results[itarget] = result
+        # print('Result keys: ', results.keys())
         return results
-    
+        # else:
+        #     for itarget in range(data.shape[0]):
+        #         results[itarget] = self.analyze_one_trace(data, itarget, pars=pars)
+        #     print('Result keys no parallel: ', results.keys())
+        #     return results
+
     def analyze_one_trace(self, data, itarget, pars=None):
         
         jtrial = pars['jtrial']
@@ -605,6 +616,7 @@ class AnalyzeMap(object):
         avgnpts = []
         avg_spont = []
         avg_evoked = []
+        measures = []  # simple measures, q, amp, half-width
         fit_tau1 = []
         fit_tau2 = []
         fit_amp = []
@@ -704,6 +716,8 @@ class AnalyzeMap(object):
         fit_tau2.append(method.fitted_tau2)
         fit_amp.append(method.Amplitude)
         avg_evoked.append(avg_evoked_one)
+        measures.append(method.measure_events(ev_onsets))
+        
         txb = avg_evokedtb  # only need one of these.
         if not np.isnan(method.fitted_tau1):
             npk_sp = self.select_events(ok_events, [0.], st_times[0]-(method.fitted_tau1*5), rate, mode='accept')
@@ -719,7 +733,7 @@ class AnalyzeMap(object):
         res = {'criteria': crit, 'onsets': onsets, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex, 
             'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
             'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': data.shape[1],
-            'evoked_ev': evoked_ev, 'spont_ev': spont_ev, 'nevents': nevents}
+            'evoked_ev': evoked_ev, 'spont_ev': spont_ev, 'measures': measures, 'nevents': nevents}
         return res
 
 
@@ -793,7 +807,7 @@ class AnalyzeMap(object):
         for j in range(len(self.stimtimes['start'])):
             t = self.stimtimes['start'][j]
             if isinstance(t, float) and np.diff(yl) > 0: # check that plot is ok to try
-                ax.plot([t, t], yl, 'b-', linewidth=0.5, alpha=0.6, rasterized=self.rasterize)
+                ax.plot([t, t], yl, 'b-', linewidth=0.5, alpha=0.6, rasterized=self.rasterized)
 
     def plot_events(self, axh, results, colorid=0):
         """
@@ -842,39 +856,62 @@ class AnalyzeMap(object):
             PH.nice_plot(axh, spines=['left', 'bottom'], position=-0.025, direction='outward', axesoff=False)
             axh.set_xlim(0., self.AR.tstart-0.005)
 
-    def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None):
+    def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None, trsel=None):
         if ax is None:
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
         nevtimes = 0
-        for j in range(mdata.shape[0]):
-            for i in range(mdata.shape[1]):
-                if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
-                    ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
-                            rasterized=self.rasterize, zorder=10)
-                if events is not None and j in list(events.keys()):
-                    smpki = events[j][i]['smpksindex'][0]
-                    # for k in range(len(smpki)):
-                    #     if tb[smpki][k] < 0.6:
-                    #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
-                    nevtimes += len(smpki)
-                    if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
-                        # The following plot call causes problems if done rasterized. 
-                        # See: https://github.com/matplotlib/matplotlib/issues/12003
-                        # may be fixed in the future. For now, don't rasterize.
-                        ax.plot(tb[smpki], mdata[0, i, smpki]*self.scale_factor + self.stepi*i,
-                         'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=False) # self.rasterize)
+        if trsel is None:
+            for j in range(mdata.shape[0]):
+                for i in range(mdata.shape[1]):
+                    if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
+                        ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
+                                rasterized=False, zorder=10)
+                    if events is not None and j in list(events.keys()):
+                        smpki = events[j][i]['smpksindex'][0]
+                        # for k in range(len(smpki)):
+                        #     if tb[smpki][k] < 0.6:
+                        #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
+                        nevtimes += len(smpki)
+                        if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
+                            # The following plot call causes problems if done rasterized. 
+                            # See: https://github.com/matplotlib/matplotlib/issues/12003
+                            # may be fixed in the future. For now, don't rasterize.
+                            ax.plot(tb[smpki], mdata[0, i, smpki]*self.scale_factor + self.stepi*i,
+                        
+                             'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+        else:
+            for j in range(mdata.shape[0]):
+                if tb.shape[0] > 0 and mdata[0,trsel,:].shape[0] > 0:
+                    ax.plot(tb, mdata[0, trsel, :]*self.scale_factor, linewidth=0.2,
+                            rasterized=False, zorder=10)
+            PH.clean_axes(ax)
+            PH.calbar(ax, calbar=[0.6, -200e-12*self.scale_factor, 0.05, 100e-12*self.scale_factor], 
+                axesoff=True, orient='left', unitNames={'x': 's', 'y': 'pA'}, fontsize=11, weight='normal', font='Arial')
             
         mpl.suptitle(str(title).replace('_', '\_'), fontsize=8)
         self.plot_timemarker(ax)
         ax.set_xlim(0, self.AR.tstart-0.001)
 
-    def plot_avgevent_traces(self, evtype, mdata=None, events=None, ax=None, scale=1.0, label='pA'):
+    def get_calbar_Yscale(self, amp):
+        """
+        Pick a scale for the calibration bar based on the amplitude to be represented
+        """
+        sc = [10., 20., 50., 100., 200., 400., 500., 1000., 1500., 2000., 2500., 3000., 5000., 10000., 15000., 20000.]
+        a = amp
+        if a < sc[0]:
+            return sc[0]
+        for i in range(len(sc)-1):
+            if a >= sc[i] and a < sc[i+1]:
+                return sc[i+1]
+        return(sc[-1])
+        
+    def plot_avgevent_traces(self, evtype, mdata=None, events=None, ax=None, scale=1.0, label='pA', rasterized=False):
 
         if events is None or ax is None:
             return
         nevtimes = 0
-        line = {'avgevoked': 'r-', 'avgspont': 'k-'}
+        line = {'avgevoked': 'k-', 'avgspont': 'k-'}
         ltitle = {'avgevoked': 'Evoked (%s)'%label, 'avgspont': 'Spont (%s)'%label}
         result_names = {'avgevoked': 'evoked_ev', 'avgspont': 'spont_ev'}
             
@@ -891,7 +928,8 @@ class AnalyzeMap(object):
             eventmin = sp_min
         ave = []
         # compute average events and time bases
-        
+        minev = 0.
+        maxev = 0.
         for trial in events.keys():
             tb0 = events[trial][0]['aveventtb']  # get from first trace
             rate = np.mean(np.diff(tb0))
@@ -908,19 +946,22 @@ class AnalyzeMap(object):
                     if len(evs[jevent]) == 0 or len(evs[jevent][0]) == 0:
                         continue
                     evdata = mdata[trial, itrace, evs[jevent][0][0]-ipre:evs[jevent][0][0]+ipost].copy()  # 0 is onsets
-                    # print('evdata shape: ', evdata.shape, mdata.shape, ipre, ipost, evs[jevent][0][0])
                     bl = np.mean(evdata[0:ipre-ptfivems])
                     evdata -= bl
                     if len(evdata) > 0:
-                        ave.append(evdata)
-                    ax.plot(tb[:len(evdata)], scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
+                        ave.append(evdata)  
+                        # and only plot when there is data, otherwise matplotlib complains with "negative dimension are not allowed" error
+                        ax.plot(tb[:len(evdata)]*1e3, scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=rasterized)
+                        minev = np.min([minev, np.min(scale*evdata)])
+                        maxev = np.max([maxev, np.max(scale*evdata)])
 
         nev = len(ave)
         aved = np.asarray(ave)
         if aved.shape[0] == 0:
             return
         tx = np.broadcast_to(tb, (aved.shape[0], tb.shape[0])).T
-
+        if self.sign < 0:
+            maxev = -minev
         self.MA.set_sign(self.sign)
         avedat = np.mean(aved, axis=0)
         tb = tb[:len(avedat)]
@@ -942,9 +983,17 @@ class AnalyzeMap(object):
             txt += f" SR: {srate:.2f} Hz"
         ax.text(0.05, 0.95, txt, fontsize=7, transform=ax.transAxes)
         # ax.plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
-        ax.plot(tb, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterize)
-        ax.plot(tb, scale*avedat, line[evtype], linewidth=0.625, rasterized=self.rasterize)
+        ax.plot(tb*1e3, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterized)
+        ax.plot(tb*1e3, scale*avedat, line[evtype], linewidth=0.625, rasterized=self.rasterized)
             #ax.set_label(evtype)
+        ylims = ax.get_ylim()
+        if evtype=='avgspont':
+            PH.calbar(ax, calbar=[np.max(tb)-2., ylims[0], 2.0, self.get_calbar_Yscale(np.fabs(ylims[1]-ylims[0])/4.)], 
+                axesoff=True, orient='left', unitNames={'x': 'ms', 'y': 'pA'}, fontsize=11, weight='normal', font='Arial')
+        else:
+            PH.calbar(ax, calbar=[np.max(tb)-2., ylims[0], 2.0, self.get_calbar_Yscale(maxev/4.)], 
+                axesoff=True, orient='left', unitNames={'x': 'ms', 'y': 'pA'}, fontsize=11, weight='normal', font='Arial')
+            
 
     def plot_average_traces(self, ax, tb, mdata, color='k'):
         """
@@ -968,8 +1017,8 @@ class AnalyzeMap(object):
             mdata = mdata.mean(axis=0)
 #        print('average traces: ', tb.shape, mdata.shape)
         if len(tb) > 0 and len(mdata) > 0:
-            ax.plot(tb, mdata*self.scale_factor, color, rasterized=self.rasterize, linewidth=0.6)
-        ax.set_xlim(0., self.AR.tstart-0.001)
+            ax.plot(tb*1e3, mdata*self.scale_factor, color, rasterized=self.rasterized, linewidth=0.6)
+        ax.set_xlim(0., self.AR.tstart*1e3-1.0)
         return
         # if self.sign < 0:
         #     if self.datatype == 'I':
@@ -994,11 +1043,12 @@ class AnalyzeMap(object):
     def plot_photodiode(self, ax, tb, pddata, color='k'):
 #        print('photodiode: ', tb.shape, np.mean(pddata, axis=0).shape)
         if len(tb) > 0 and len(np.mean(pddata, axis=0)) > 0:
-            ax.plot(tb, np.mean(pddata, axis=0), color, rasterized=self.rasterize, linewidth=0.6)
+            ax.plot(tb, np.mean(pddata, axis=0), color, rasterized=self.rasterized, linewidth=0.6)
         ax.set_xlim(0., self.AR.tstart-0.001)
         
     def plot_map(self, axp, axcbar, pos, measure, measuretype='I_max', vmaxin=None, 
-            imageHandle=None, imagefile=None, angle=0, spotsize=20e-6, cellmarker=False):
+            imageHandle=None, imagefile=None, angle=0, spotsize=20e-6, cellmarker=False,
+            whichstim=-1, average=False):
 
         sf = 1.0 # could be 1e-6 ? data in Meters? scale to mm. 
         cmrk = 50e-6*sf # size, microns
@@ -1039,7 +1089,10 @@ class AnalyzeMap(object):
             axp.imshow(img, aspect='equal', extent=extents, origin='lower', cmap=setMapColors('gray'))
 
         spotsize = 1e3*spotsize
-        spotsizes = spotsize*np.linspace(1.0, 0.2, len(measure[measuretype]))
+        if whichstim < 0:
+            spotsizes = spotsize*np.linspace(1.0, 0.2, len(measure[measuretype]))
+        else:
+            spotsizes = spotsize*np.ones(len(measure[measuretype]))
         pos = self.scale_and_rotate(pos, scale=1.0, angle=angle)
         xlim = [np.min(pos[:,0])-spotsize, np.max(pos[:,0])+spotsize]
         ylim = [np.min(pos[:,1])-spotsize, np.max(pos[:,1])+spotsize]
@@ -1054,8 +1107,15 @@ class AnalyzeMap(object):
 
         # print('vmax res: ', vmax)
 #        print('n measures/spots: ', len(measure[measuretype]), len(spotsizes), len(pos))
+        if whichstim >= 0:  # which stim of -1 is ALL stimuli
+            whichmeasures = [whichstim]
+        elif average:
+            whichmeasures = [0]
+            measure[measuretype][0] = np.mean(measure[measuretype])  # just 
+        else:
+            whichmeasures = range(len(measure[measuretype]))
 
-        for im in range(len(measure[measuretype])):  # there may be multiple measure[measuretype]s (repeated stimuli of different kinds) in a map
+        for im in whichmeasures:  # there may be multiple measure[measuretype]s (repeated stimuli of different kinds) in a map
             # note circle size is radius, and is set by the laser spotsize (which is diameter)
             radw = np.ones(pos.shape[0])*spotsizes[im]
             radh = np.ones(pos.shape[0])*spotsizes[im]
@@ -1101,7 +1161,12 @@ class AnalyzeMap(object):
         if imageHandle is not None and imagefile is not None:
             axp.set_aspect('equal')
         axp.set_aspect('equal')
-        axp.set_title(measuretype)
+        title = measuretype
+        if whichstim >= 0:
+            title += f', Stim \# {whichstim:d} Only'
+        if average:
+            title += ', Average'
+        axp.set_title(title)
         if vmaxin is None:
             return vmax
         else:
@@ -1287,14 +1352,15 @@ class AnalyzeMap(object):
 #        print('dmin: ', np.min(np.min(datar)))
         return datar, avgd
 
-    def analyze_one_map(self, dataset, plotevents=False):
+    def analyze_one_map(self, dataset, plotevents=False, raster=False, noparallel=False):
        # print('ANALYZE ONE MAP')
+        self.noparallel = noparallel
         self.data, self.tb, pars, info=self.readProtocol(dataset, sparsity=None)
         if self.data is None:   # check that we were able to retrieve data
             self.P = None
             return None
         self.last_dataset = dataset
-        print('artifact flag: ', self.fix_artifact_flag)
+        print('Artifact Suppression: ', self.fix_artifact_flag)
         if self.fix_artifact_flag:
             self.data_clean, self.avgdata = self.fix_artifacts(self.data)
         else:
@@ -1320,7 +1386,7 @@ class AnalyzeMap(object):
         return results
 
     def display_one_map(self, dataset, imagefile=None, rotation=0.0, measuretype=None, 
-            plotevents=True):
+            plotevents=True, rasterized=True, whichstim=-1, average=False, trsel=None, plotmode='document'):
         if dataset != self.last_dataset:
             results = self.analyze_one_map(dataset)
         else:
@@ -1356,13 +1422,24 @@ class AnalyzeMap(object):
         trs = imgh - trh  # 2nd trace position (offset from top of image box)
         y = 0.08 + np.arange(0., 0.7, imgw+0.05)  # y positions 
         self.mapfromid = {0: ['A', 'B', 'C'], 1: ['D', 'E', 'F'], 2: ['G', 'H', 'I']}        
-        self.plotspecs = OrderedDict([('A', {'pos': [0.07, 0.3, 0.62, 0.3]}),
+        if plotmode == 'document':
+            self.plotspecs = OrderedDict([('A', {'pos': [0.07, 0.3, 0.62, 0.3]}),
                                  ('A1',{'pos': [0.37, 0.012, 0.62, 0.3]}), # scale bar
                                  ('B', {'pos': [0.07, 0.3, 0.475, 0.125]}),
                                  ('C1', {'pos': [0.07, 0.3, 0.31, 0.125]}),
                                  ('C2', {'pos': [0.07, 0.3, 0.16, 0.125]}),
                                  ('D', {'pos': [0.07, 0.3, 0.05, 0.075]}),
                                  ('E', {'pos': [0.47, 0.45, 0.05, 0.85]}),
+                            #     ('F', {'pos': [0.47, 0.45, 0.10, 0.30]}),
+                                 ])  # a1 is cal bar
+        if plotmode == 'publication':
+            self.plotspecs = OrderedDict([('A', {'pos': [0.45, 0.35, 0.58, 0.4]}),
+                                 ('A1',{'pos': [0.82, 0.012, 0.58, 0.4]}), # scale bar
+                                 ('B', {'pos': [0.1, 0.78, 0.40, 0.1]}),
+                                 ('C1', {'pos': [0.1, 0.36, 0.05, 0.25]}),
+                                 ('C2', {'pos': [0.52, 0.36, 0.05, 0.25]}),
+                                 ('D', {'pos': [0.1, 0.78, 0.32, 0.05]}),
+                                 ('E', {'pos': [0.1, 0.78, 0.45, 0.125]}),
                             #     ('F', {'pos': [0.47, 0.45, 0.10, 0.30]}),
                                  ])  # a1 is cal bar
 
@@ -1390,13 +1467,14 @@ class AnalyzeMap(object):
         if self.overlay_scale > 0.:
             self.newvmax = self.overlay_scale
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
-            vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize)
-        self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'])  # stacked on right
+            vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize,
+            whichstim=whichstim, average=average)
+        self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'], trsel=trsel)  # stacked on right
 
         self.plot_avgevent_traces(evtype='avgevoked', mdata=self.data_clean, ax=self.P.axdict['C1'], 
-                events=results['events'], scale=scf, label=label)
+                events=results['events'], scale=scf, label=label, rasterized=rasterized)
         self.plot_avgevent_traces(evtype='avgspont', mdata=self.data_clean, ax=self.P.axdict['C2'], 
-                events=results['events'], scale=scf, label=label)
+                events=results['events'], scale=scf, label=label, rasterized=rasterized)
         
         if self.photodiode:
             self.plot_photodiode(self.P.axdict['D'], self.AR.Photodiode_time_base[0], self.AR.Photodiode)
