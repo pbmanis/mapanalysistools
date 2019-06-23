@@ -861,7 +861,7 @@ class AnalyzeMap(object):
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
         nevtimes = 0
-        print(dir(events))
+        print(events.keys())
         exit()
         if trsel is None:
             for j in range(mdata.shape[0]):
