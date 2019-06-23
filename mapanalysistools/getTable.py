@@ -19,7 +19,7 @@ import pyqtgraph as pg
 from pyqtgraph.parametertree import Parameter, ParameterTree
 
 from ephysanalysis import acq4read
-from . import analyzeMapData as AMD
+from mapanalysistools import analyzeMapData as AMD
 import pylibrary.fileselector as FS
 
 AR = acq4read.Acq4Read()  # instance of the acq4 file reader
@@ -70,7 +70,7 @@ class BuildGui():
         self.mainwin.setGeometry( 100 , 100 , 1400 , 900)
 
         # build buttons at top of controls
-        self.current_DSC = self.tree.keys()[0]
+        self.current_DSC = list(self.tree.keys())[0]
         self.btn_read = pg.Qt.QtGui.QPushButton("Read")
         self.btn_analyze = pg.Qt.QtGui.QPushButton("Analyze")
         self.btn_test = pg.Qt.QtGui.QPushButton('Test')
@@ -91,8 +91,8 @@ class BuildGui():
         # analysis
         params = [
             {'name': 'Analysis', 'type': 'group', 'children': [
-                {'name': 'EventType', 'type': 'list', 'values': self.event_taus.keys(),
-                        'value': self.event_taus.keys()},
+                {'name': 'EventType', 'type': 'list', 'values': list(self.event_taus.keys()),
+                        'value': list(self.event_taus.keys())},
                 {'name': 'EPSC_fast_enable', 'type': 'bool', 'value': True, 'default': True},
                 {'name': 'EPSC_fast_taur', 'type': 'float', 'value': 0.25, #'step': 0.05, 
                     'limits': [0.1, 10.0],
@@ -258,7 +258,7 @@ class BuildGui():
     def setParams(self, isel):
         self.params = [
             {'name': 'Day', 'type': 'group', 'children': 
-                [{'name': 'Slices/Cells', 'type': 'list', 'values': self.tree.keys(), 'value': self.tree.keys()[isel]}]
+                [{'name': 'Slices/Cells', 'type': 'list', 'values': list(self.tree.keys()), 'value': list(self.tree.keys())[isel]}]
             }
         ]
         return self.params

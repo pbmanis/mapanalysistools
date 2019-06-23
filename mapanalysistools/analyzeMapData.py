@@ -856,13 +856,13 @@ class AnalyzeMap(object):
             PH.nice_plot(axh, spines=['left', 'bottom'], position=-0.025, direction='outward', axesoff=False)
             axh.set_xlim(0., self.AR.tstart-0.005)
 
-    def plot_stacked_traces(self, tb, mdata, title, events=None, ax=None, trsel=None):
+    def plot_stacked_traces(self, tb, mdata, title, results, ax=None, trsel=None):
         if ax is None:
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
+        events = results['events']
+        print('spont dur: ', results['spont_dur'])
         nevtimes = 0
-        print(events.keys())
-        exit()
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
@@ -879,7 +879,7 @@ class AnalyzeMap(object):
                             # The following plot call causes problems if done rasterized. 
                             # See: https://github.com/matplotlib/matplotlib/issues/12003
                             # may be fixed in the future. For now, don't rasterize.
-                            if tb[smpki] < events['spont_dur']:
+                            if tb[smpki] < results['spont_dur']:
                                 mark = 'ko'
                                 alpha = 1.0
                             else:
@@ -1477,7 +1477,7 @@ class AnalyzeMap(object):
         self.newvmax = self.plot_map(self.P.axdict['A'], cbar, results['positions'], measure=results, measuretype=measuretype, 
             vmaxin=self.newvmax, imageHandle=self.MT, imagefile=imagefile, angle=rotation, spotsize=self.AR.spotsize,
             whichstim=whichstim, average=average)
-        self.plot_stacked_traces(self.tb, self.data_clean, dataset, events=results['events'], ax=self.P.axdict['E'], trsel=trsel)  # stacked on right
+        self.plot_stacked_traces(self.tb, self.data_clean, dataset, results, ax=self.P.axdict['E'], trsel=trsel)  # stacked on right
 
         self.plot_avgevent_traces(evtype='avgevoked', mdata=self.data_clean, ax=self.P.axdict['C1'], 
                 events=results['events'], scale=scf, label=label, rasterized=rasterized)

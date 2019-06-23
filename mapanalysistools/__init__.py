@@ -7,9 +7,9 @@ init for mapanalysistools
 version_info = (0, 1, 0, '')
 __version__ = '%d.%d.%d%s' % version_info
 
-from . import getTable
-from . import analyzeMapData
-#from . import plotMapData  # removed - is an old unstructured version for source information
-from . import functions
-from . import colormaps
-from . import digital_filters
+import mapanalysistools.getTable
+import mapanalysistools.analyzeMapData
+#import mapanalysistoolsplotMapData  # removed - is an old unstructured version for source information
+import mapanalysistools.functions
+import mapanalysistools.colormaps
+import mapanalysistools.digital_filters
