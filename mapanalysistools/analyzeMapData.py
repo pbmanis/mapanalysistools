@@ -720,7 +720,7 @@ class AnalyzeMap(object):
         
         txb = avg_evokedtb  # only need one of these.
         if not np.isnan(method.fitted_tau1):
-            npk_sp = self.select_events(ok_events, [0.], st_times[0]-(method.fitted_tau1*5), rate, mode='accept')
+            npk_sp = self.select_events(ok_events, [0.], st_times[0]-(method.fitted_tau1*5.0), rate, mode='accept')
             sp_onsets = np.array(method.onsets)[npk_sp]
             avg_spont_one, avg_sponttb, allev_spont = method.average_events(sp_onsets)
             avg_spont.append(avg_spont_one)
@@ -861,6 +861,8 @@ class AnalyzeMap(object):
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
         nevtimes = 0
+        print(dir(events))
+        exit()
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
@@ -877,6 +879,12 @@ class AnalyzeMap(object):
                             # The following plot call causes problems if done rasterized. 
                             # See: https://github.com/matplotlib/matplotlib/issues/12003
                             # may be fixed in the future. For now, don't rasterize.
+                            if tb[smpki] < events['spont_dur']:
+                                mark = 'ko'
+                                alpha = 1.0
+                            else:
+                                mark = 'ro'
+                                alpah=0.6
                             ax.plot(tb[smpki], mdata[0, i, smpki]*self.scale_factor + self.stepi*i,
                         
                              'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
