@@ -16,7 +16,7 @@ import sys
 import sqlite3
 import matplotlib
 import pyqtgraph.multiprocess as mp
-
+import matplotlib.colors as CM
 import argparse
 from pathlib import Path
 import numpy as np
@@ -636,18 +636,20 @@ class AnalyzeMap(object):
             aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim, 
                     thresh=self.threshold, llambda=1., order=7)  # note threshold scaling...
             method = aj
-        else:
+        elif self.methodname == 'cb':
             cb = minis_methods.ClementsBekkers()
             jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
             cb.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                     sign=self.sign, eventstartthr=eventstartthr)
             idata = data.view(np.ndarray)[jtrial, itarget, :]
             meandata = np.mean(idata[:jmax])
-            res = cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
+            cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
             # result.append(res)
             # crit.append(cb.Crit)
             # scale.append(cb.Scale)
             method = cb
+        else:
+            raise ValueError(f'analyzeMapData:analyzeOneTrace: Method <{self.methodname:s}> is not valid (use "aj" or "cb")')
     
         # filter out events at times of stimulus artifacts
         # build array of artifact times first 
@@ -717,10 +719,10 @@ class AnalyzeMap(object):
         fit_amp.append(method.Amplitude)
         avg_evoked.append(avg_evoked_one)
         measures.append(method.measure_events(ev_onsets))
-        
+        avgtau1 = np.nanmean(method.fitted_tau1)
         txb = avg_evokedtb  # only need one of these.
         if not np.isnan(method.fitted_tau1):
-            npk_sp = self.select_events(ok_events, [0.], st_times[0]-(method.fitted_tau1*5.0), rate, mode='accept')
+            npk_sp = self.select_events(ok_events, [0.], st_times[0]-(avgtau1*5.0), rate, mode='accept')
             sp_onsets = np.array(method.onsets)[npk_sp]
             avg_spont_one, avg_sponttb, allev_spont = method.average_events(sp_onsets)
             avg_spont.append(avg_spont_one)
@@ -861,8 +863,9 @@ class AnalyzeMap(object):
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
         events = results['events']
-        print('spont dur: ', results['spont_dur'])
+        # print('event keys: ', events.keys())
         nevtimes = 0
+        spont_ev_count = 0
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
@@ -871,6 +874,7 @@ class AnalyzeMap(object):
                                 rasterized=False, zorder=10)
                     if events is not None and j in list(events.keys()):
                         smpki = events[j][i]['smpksindex'][0]
+                        # print('events[j,i].keys: ', events[j][i].keys())
                         # for k in range(len(smpki)):
                         #     if tb[smpki][k] < 0.6:
                         #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
@@ -879,15 +883,26 @@ class AnalyzeMap(object):
                             # The following plot call causes problems if done rasterized. 
                             # See: https://github.com/matplotlib/matplotlib/issues/12003
                             # may be fixed in the future. For now, don't rasterize.
-                            if tb[smpki] < results['spont_dur']:
-                                mark = 'ko'
-                                alpha = 1.0
-                            else:
-                                mark = 'ro'
-                                alpah=0.6
-                            ax.plot(tb[smpki], mdata[0, i, smpki]*self.scale_factor + self.stepi*i,
-                        
-                             'ro', alpha=0.6, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                            sd = events[j][i]['spont_dur'][0]
+                            ts = tb[smpki][np.where(tb[smpki] < sd)[0]]
+                            # print('tb: ', tb[smpki])
+                            # print('ts: ', ts)
+                            te = tb[smpki][np.where(tb[smpki] >= sd)[0]]
+                            # print('te: ', te)
+                            ms = np.array(mdata[0, i, smpki][np.argwhere(tb[smpki] <  sd)]).ravel()
+                            spont_ev_count += ms.shape[0]
+                            me = np.array(mdata[0, i, smpki][np.argwhere(tb[smpki] >= sd)]).ravel()
+                            # print(ms)
+                            cr = CM.to_rgba('r', alpha=0.6)
+                            ck = CM.to_rgba('k', alpha=1.0)
+                            # cx = np.array([cr if tx < sd else CM.to_rgba('k', alpha=1.0) for tx in tb[smpki]])
+                            ax.plot(ts, ms*self.scale_factor + self.stepi*i,
+                             'o', color=ck, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                            ax.plot(te, me*self.scale_factor + self.stepi*i,
+                             'o', color=cr, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                            # ax.plot(tb[smpki], mdata[0, i, smpki]*self.scale_factor + self.stepi*i,
+                            #  'o', color=cr, markersize=2., markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+            print(f"      SPONTANEOUS Event Count: {spont_ev_count:d}")
         else:
             for j in range(mdata.shape[0]):
                 if tb.shape[0] > 0 and mdata[0,trsel,:].shape[0] > 0:
@@ -914,9 +929,9 @@ class AnalyzeMap(object):
                 return sc[i+1]
         return(sc[-1])
         
-    def plot_avgevent_traces(self, evtype, mdata=None, events=None, ax=None, scale=1.0, label='pA', rasterized=False):
+    def plot_avgevent_traces(self, evtype, mdata=None, trace_tb=None, events=None, ax=None, scale=1.0, label='pA', rasterized=False):
 
-        if events is None or ax is None:
+        if events is None or ax is None or trace_tb is None:
             return
         nevtimes = 0
         line = {'avgevoked': 'k-', 'avgspont': 'k-'}
@@ -938,7 +953,9 @@ class AnalyzeMap(object):
         # compute average events and time bases
         minev = 0.
         maxev = 0.
-        for trial in events.keys():
+        # for trial in events.keys():
+        spont_ev_count = 0
+        for trial in range(mdata.shape[0]):
             tb0 = events[trial][0]['aveventtb']  # get from first trace
             rate = np.mean(np.diff(tb0))
             tpre = 0.002 # 0.1*np.max(tb0)
@@ -948,12 +965,29 @@ class AnalyzeMap(object):
             tb = np.arange(-tpre, tpost+rate, rate) + tpre
             ptfivems = int(0.0005/rate)
             pwidth = int(0.0005/rate/2.0)
-            for itrace in events[trial].keys():  # traces in the evtype list
+            # for itrace in events[trial].keys():  # traces in the evtype list
+            for itrace in range(mdata.shape[1]):  # traces in the evtype list
+                if events is None or trial not in list(events.keys()):
+                    print('NO EVENS NO KEYS: ', itrace)
+                    continue
                 evs = events[trial][itrace][result_names[evtype]]
-                for jevent in range(len(evs)): # evs is 2 element array: [0] are onsets and [1] is peak
-                    if len(evs[jevent]) == 0 or len(evs[jevent][0]) == 0:
+                if len(evs[0]) == 0:  # skip trace if there are NO events
+                    continue
+                # print('evs: ', evs)
+                spont_ev_count += len(evs[0][1])
+                
+                sd = events[trial][itrace]['spont_dur'][0]
+                for jevent in evs[0][0]: # evs is 2 element array: [0] are onsets and [1] is peak; this aligns to onsets
+                    # print('  jevent: ', jevent)
+                    # if len(evs[jevent]) == 0 or len(evs[jevent][0]) == 0:
+                    #     continue
+                    if evtype == 'spont_ev' and trace_tb[jevent+2*ipost] > sd:  # remove events that cross into stimuli
                         continue
-                    evdata = mdata[trial, itrace, evs[jevent][0][0]-ipre:evs[jevent][0][0]+ipost].copy()  # 0 is onsets
+                    if evtype == 'evoked_ev' and trace_tb[jevent] <= sd:  # only post events
+                        continue
+                    # evdata = mdata[trial, itrace, evs[jevent][0][0]-ipre:evs[jevent][0][0]+ipost].copy()  # 0 is onsets
+                    # print('jevent: ', jevent)
+                    evdata = mdata[trial, itrace, jevent-ipre:jevent+ipost].copy()  # 0 is onsets
                     bl = np.mean(evdata[0:ipre-ptfivems])
                     evdata -= bl
                     if len(evdata) > 0:
@@ -962,6 +996,7 @@ class AnalyzeMap(object):
                         ax.plot(tb[:len(evdata)]*1e3, scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=rasterized)
                         minev = np.min([minev, np.min(scale*evdata)])
                         maxev = np.max([maxev, np.max(scale*evdata)])
+            # print(f"      {evtype:s} Event Count in AVERAGE: {spont_ev_count:d}, len ave: {len(ave):d}")
 
         nev = len(ave)
         aved = np.asarray(ave)
@@ -1479,9 +1514,9 @@ class AnalyzeMap(object):
             whichstim=whichstim, average=average)
         self.plot_stacked_traces(self.tb, self.data_clean, dataset, results, ax=self.P.axdict['E'], trsel=trsel)  # stacked on right
 
-        self.plot_avgevent_traces(evtype='avgevoked', mdata=self.data_clean, ax=self.P.axdict['C1'], 
+        self.plot_avgevent_traces(evtype='avgevoked', mdata=self.data_clean, trace_tb=self.tb, ax=self.P.axdict['C1'], 
                 events=results['events'], scale=scf, label=label, rasterized=rasterized)
-        self.plot_avgevent_traces(evtype='avgspont', mdata=self.data_clean, ax=self.P.axdict['C2'], 
+        self.plot_avgevent_traces(evtype='avgspont', mdata=self.data_clean, trace_tb=self.tb, ax=self.P.axdict['C2'], 
                 events=results['events'], scale=scf, label=label, rasterized=rasterized)
         
         if self.photodiode:
