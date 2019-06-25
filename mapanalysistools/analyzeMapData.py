@@ -525,7 +525,7 @@ class AnalyzeMap(object):
         self.nstim = nstim
         # find max position stored in the info dict
         pmax = len(list(info.keys()))
-        Qr = np.zeros((nstim, data.shape[1]))
+        Qr = np.zeros((nstim, data.shape[1]))  # data shape[1] is # of targets
         Qb = np.zeros((nstim, data.shape[1]))
         Zscore = np.zeros((nstim, data.shape[1]))
         I_max = np.zeros((nstim, data.shape[1]))
@@ -564,35 +564,50 @@ class AnalyzeMap(object):
             
         tmaxev = np.max(tb) # msec
         for jtrial in range(data.shape[0]):  # all trials
-            res = self.analyze_one_trial(data, pars={'rate': rate, 'jtrial': jtrial, 'tmaxev': tmaxev,
+            res = self.analyze_one_trial(data[jtrial], pars={'rate': rate, 'jtrial': jtrial, 'tmaxev': tmaxev,
                     'eventstartthr': eventstartthr, 'data_nostim': data_nostim,
                     'eventlist': eventlist, 'nevents': nevents, 'tb': tb, 'testplots': testplots})
             events[jtrial] = res
 
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
                'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset, 
-               'sign': self.sign, 'avgevents': avgevents, 'rate': rate}
+               'sign': self.sign, 'avgevents': avgevents, 'rate': rate, 'ntrials': data.shape[0]}
 
     def analyze_one_trial(self, data, pars=None):
-
+        """
+        data: numpy array (2D): no default
+             data, should be [target, tracelen]; e.g. already points to the trial
+        pars: dict
+            Dictionary with the following entries:
+                rate, jtrial, tmaxev, evenstartthr, data-nostim, eventlist, nevents, tb, testplots
+        """
         nworkers = 16
-        tasks = range(data.shape[1])  # number of tasks that will be needed
+        tasks = range(data.shape[0])  # number of tasks that will be needed is number of targets
         result = [None] * len(tasks)  # likewise
         results = {}
+        print('noparallel: ', self.noparallel)
         if not self.noparallel:
             with mp.Parallelize(enumerate(tasks), results=results, workers=nworkers) as tasker:
                 for itarget, x in tasker:
-                    result = self.analyze_one_trace(data, itarget, pars=pars)
+                    result = self.analyze_one_trace(data[itarget], itarget, pars=pars)
                     tasker.results[itarget] = result
-            print('Result keys parallel: ', results.keys())
+            # print('Result keys parallel: ', results.keys())
         else:
-            for itarget in range(data.shape[1]):
-                results[itarget] = self.analyze_one_trace(data, itarget, pars=pars)
-            print('Result keys no parallel: ', results.keys())
+            for itarget in range(data.shape[0]):
+                results[itarget] = self.analyze_one_trace(data[itarget], itarget, pars=pars)
+            # print('Result keys no parallel: ', results.keys())
         return results
         
     def analyze_one_trace(self, data, itarget, pars=None):
+        """
+        Analyze just one trace
         
+        Parameters
+        ----------
+        data : 1D array length of trace
+            The trace for just one target
+        
+        """
         jtrial = pars['jtrial']
         rate = pars['rate']
         jtrial = pars['jtrial']
@@ -630,7 +645,7 @@ class AnalyzeMap(object):
             jmax = int(tmaxev/rate)
             aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                     sign=self.sign, eventstartthr=eventstartthr)
-            idata = data.view(np.ndarray)[jtrial, itarget, :]
+            idata = data.view(np.ndarray) # [jtrial, itarget, :]
             meandata = np.mean(idata[:jmax])
             aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim, 
                     thresh=self.threshold, llambda=1., order=7)  # note threshold scaling...
@@ -640,7 +655,7 @@ class AnalyzeMap(object):
             jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
             cb.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                     sign=self.sign, eventstartthr=eventstartthr)
-            idata = data.view(np.ndarray)[jtrial, itarget, :]
+            idata = data.view(np.ndarray)# [jtrial, itarget, :]
             meandata = np.mean(idata[:jmax])
             cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
             # result.append(res)
@@ -733,7 +748,7 @@ class AnalyzeMap(object):
         #     method.plots(title='%d' % i, events=None)
         res = {'criteria': crit, 'onsets': onsets, 'peaktimes': tpks, 'smpks': smpks, 'smpksindex': smpksindex, 
             'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
-            'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': data.shape[1],
+            'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': 1,
             'evoked_ev': evoked_ev, 'spont_ev': spont_ev, 'measures': measures, 'nevents': nevents}
         return res
 
