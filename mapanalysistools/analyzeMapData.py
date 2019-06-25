@@ -579,19 +579,18 @@ class AnalyzeMap(object):
         tasks = range(data.shape[1])  # number of tasks that will be needed
         result = [None] * len(tasks)  # likewise
         results = {}
-        # if not self.noparallel:
-        with mp.Parallelize(enumerate(tasks), results=results, workers=nworkers) as tasker:
-            for itarget, x in tasker:
-                result = self.analyze_one_trace(data, itarget, pars=pars)
-                tasker.results[itarget] = result
-        # print('Result keys: ', results.keys())
+        if not self.noparallel:
+            with mp.Parallelize(enumerate(tasks), results=results, workers=nworkers) as tasker:
+                for itarget, x in tasker:
+                    result = self.analyze_one_trace(data, itarget, pars=pars)
+                    tasker.results[itarget] = result
+            print('Result keys parallel: ', results.keys())
+        else:
+            for itarget in range(data.shape[1]):
+                results[itarget] = self.analyze_one_trace(data, itarget, pars=pars)
+            print('Result keys no parallel: ', results.keys())
         return results
-        # else:
-        #     for itarget in range(data.shape[0]):
-        #         results[itarget] = self.analyze_one_trace(data, itarget, pars=pars)
-        #     print('Result keys no parallel: ', results.keys())
-        #     return results
-
+        
     def analyze_one_trace(self, data, itarget, pars=None):
         
         jtrial = pars['jtrial']
@@ -850,7 +849,7 @@ class AnalyzeMap(object):
 #                 y.extend(xn)
 
             y = np.array(eventtimes)*rate
-            print('AR Tstart: ', self.AR.tstart, y.shape)
+            # print('AR Tstart: ', self.AR.tstart, y.shape)
             bins = np.linspace(0., self.AR.tstart, int(self.AR.tstart*1000/2.0)+1)
             axh.hist(y, bins=bins,
                 facecolor='k', edgecolor='k', linewidth=0.5, histtype='stepfilled', align='right')
@@ -981,9 +980,9 @@ class AnalyzeMap(object):
                     # print('  jevent: ', jevent)
                     # if len(evs[jevent]) == 0 or len(evs[jevent][0]) == 0:
                     #     continue
-                    if evtype == 'spont_ev' and trace_tb[jevent+2*ipost] > sd:  # remove events that cross into stimuli
+                    if evtype == 'avgspont' and trace_tb[jevent] + 0.010 > sd:  # remove events that cross into stimuli
                         continue
-                    if evtype == 'evoked_ev' and trace_tb[jevent] <= sd:  # only post events
+                    if evtype == 'avgevoked' and trace_tb[jevent] <= sd:  # only post events
                         continue
                     # evdata = mdata[trial, itrace, evs[jevent][0][0]-ipre:evs[jevent][0][0]+ipost].copy()  # 0 is onsets
                     # print('jevent: ', jevent)
