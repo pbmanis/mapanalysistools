@@ -183,6 +183,7 @@ class AnalyzeMap(object):
         self.LPF = 5000.
         self.notch = False
         self.notch_freqs = [60., 120., 180., 240.]
+        self.notch_Q = 90.
         self.lbr_command = False  # laser blue raw waveform (command)
         self.photodiode = False  # photodiode waveform (recorded)
         self.fix_artifact_flag = True
@@ -204,7 +205,7 @@ class AnalyzeMap(object):
         self.noderivative_artifact = True  # normally
         self.sd_thr = 3.0  # threshold in sd for diff based artifact suppression.
         self.template_file = None
-        self.stepi = 20.
+        self.stepi = 50.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
         self.rasterized = rasterize
         self.methodname = 'aj'  # default event detector
@@ -212,9 +213,10 @@ class AnalyzeMap(object):
               'blue': '\x1b[34m', 'cyan': '\x1b[36m' , 'white': '\x1b[0m', 'backgray': '\x1b[100m'}
         self.MA = minis.minis_methods.MiniAnalyses()  # get a minianalysis instance
 
-    def set_notch(self, notch, freqs=[60]):
+    def set_notch(self, notch, freqs=[60], Q=90.):
         self.notch = notch
         self.notch_freqs = freqs
+        self.notch_Q = Q
 
     def set_LPF(self, LPF):
         self.LPF = LPF
@@ -264,8 +266,7 @@ class AnalyzeMap(object):
         self.datatype = self.AR.mode[0].upper()  # get mode and simplify to I or V
         if self.datatype == 'I':
             self.stepi = 2.0
-        else:
-            self.stepi = 20.0
+        # otherwise use the default, which is set in the init routine
 
         self.stimtimes = self.AR.getBlueLaserTimes()
         if self.stimtimes is not None:
@@ -280,7 +281,9 @@ class AnalyzeMap(object):
             pass
         self.shutter = self.AR.getDeviceData('Laser-Blue-raw', 'Shutter')
         self.AR.getScannerPositions()
-        data = np.reshape(self.AR.traces, (self.AR.repetitions, self.AR.traces.shape[0], self.AR.traces.shape[1]))
+        # print('traces shape, repetitions: ', self.AR.traces.shape)
+        # print(self.AR.repetitions)
+        data = np.reshape(self.AR.traces, (self.AR.repetitions, int(self.AR.traces.shape[0]/self.AR.repetitions), self.AR.traces.shape[1]))
         endtime = timeit.default_timer()
         print("    Reading protocol {0:s} took {1:6.1f} s".format(protocolFilename.name, endtime-starttime))
         return data, self.AR.time_base, self.AR.sequenceparams, self.AR.scannerinfo
@@ -474,20 +477,41 @@ class AnalyzeMap(object):
         nyquistfreq = samplefreq/1.95
         wn = self.LPF/nyquistfreq
         b, a = scipy.signal.bessel(2, wn)
+        if self.notch:
+            print(self.colors['yellow']+'Notch Filtering', self.notch_freqs, self.colors['white'])
+        imax = int(max(np.where(tb < self.maxtime)[0]))
+        # imax = len(tb)
+        data2 = np.zeros_like(data)
         if data.ndim == 3:
             for r in range(data.shape[0]):
                 for t in range(data.shape[1]):
-                    data[r,t,:] = filtfunc(b, a, data[r, t, :] - np.mean(data[r, t, 0:250]))
+                    data2[r,t,:imax] = filtfunc(b, a, data[r, t, :imax] - np.mean(data[r, t, 0:250]))
                     if self.notch:
-                        #print('notching', self.notch_freqs)
-                        data[r,t,:] = FILT.NotchFilter(data[r, t, :], notchf=self.notch_freqs, Q=90., QScale=False, samplefreq=samplefreq)
+                        data2[r,t,:imax] = FILT.NotchFilterZP(data[r, t, :imax], notchf=self.notch_freqs, Q=self.notch_Q,
+                            QScale=False, samplefreq=samplefreq)
         else:
-            data= filtfunc(b, a, data - np.mean(data[0:250]))
+            data2= filtfunc(b, a, data - np.mean(data[0:250]))
             if self.notch:
-                #print('notching', self.notch_freqs)
-                data = FILT.NotchFilter(data, notchf=self.notch_freqs, Q=90., QScale=False, samplefreq=samplefreq)
-
-        return data
+                data2 = FILT.NotchFilterZP(data, notchf=self.notch_freqs, Q=self.notch_Q,
+                    QScale=False, samplefreq=samplefreq)
+        
+        # if self.notch:
+        #     f, ax = mpl.subplots(1,1)
+        #     f.set_figheight(14.)
+        #     f.set_figwidth(8.)
+        #     # ax = ax.ravel()
+        #     for i in range(data.shape[-2]):
+        #         ax.plot(tb[:imax], data[0, i,:imax]+i*50e-12, color='grey', linewidth=0.5)
+        #         ax.plot(tb[:imax], data2[0, i,:imax]+i*50e-12, 'r-', linewidth=0.3)
+        #     f2, ax2 = mpl.subplots(1,1)
+        #     f2.set_figheight(8.)
+        #     f2.set_figwidth(8.)
+        #     ax2.magnitude_spectrum(data[0, 0, :imax], Fs=samplefreq, scale='dB', color='k')
+        #     ax2.magnitude_spectrum(data2[0, 0, :imax], Fs=samplefreq, scale='dB', color='r')
+        #     ax2.set_xlim(0., 500.)
+        #     mpl.show()
+        
+        return data2
 
     def analyze_protocol(self, data, tb, info,  eventstartthr=None, eventhist=True, testplots=False,
         dataset=None, data_nostim=None):
@@ -496,7 +520,6 @@ class AnalyzeMap(object):
         for the threshold in a consistent manner if there are evoked responses in the trace.
         """
 
-        data = self.filter_data(tb, data)
         rate = self.rate
         mdata = np.mean(data, axis=0)  # mean across ALL reps
 #        rate = rate*1e3  # convert rate to msec
@@ -558,6 +581,7 @@ class AnalyzeMap(object):
        # print('ANALYZE ONE MAP')
         self.noparallel = noparallel
         self.data, self.tb, pars, info=self.readProtocol(dataset, sparsity=None)
+        print('read data shape: ', self.data.shape)
         if self.data is None:   # check that we were able to retrieve data
             self.P = None
             return None
@@ -567,6 +591,8 @@ class AnalyzeMap(object):
             self.data_clean, self.avgdata = self.fix_artifacts(self.data)
         else:
             self.data_clean = self.data
+        self.data_clean = self.filter_data(self.tb, self.data_clean)
+        
         stimtimes = []
         data_nostim = []
         # get a list of data points OUTSIDE the stimulus-response window
@@ -579,6 +605,7 @@ class AnalyzeMap(object):
         endindx = np.where(self.tb >= self.AR.tstart)[0][0]
         data_nostim.append(list(range(lastd, endindx)))
         data_nostim = list(np.hstack(np.array(data_nostim)))
+        print('data shape going into analyze_protocol: ', self.data_clean.shape)
         results = self.analyze_protocol(self.data_clean, self.tb, info, eventhist=True, dataset=dataset, data_nostim=data_nostim)
         self.last_results = results
         return results
@@ -758,8 +785,6 @@ class AnalyzeMap(object):
             'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': 1,
             'evoked_ev': evoked_ev, 'spont_ev': spont_ev, 'measures': measures, 'nevents': nevents}
         return res
-        
-        
 
     def scale_and_rotate(self, poslist, sign=[1., 1.], scaleCorr=1., scale=1e6, autorotate=False, angle=0.):
         """
@@ -1073,11 +1098,12 @@ class AnalyzeMap(object):
         # print('event keys: ', events.keys())
         nevtimes = 0
         spont_ev_count = 0
+        print('trsel,mdata.shape: ', trsel, mdata.shape)
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
-                    if tb.shape[0] > 0 and mdata[0,i,:].shape[0] > 0:
-                        ax.plot(tb, mdata[0, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
+                    if tb.shape[0] > 0 and mdata[j,i,:].shape[0] > 0:
+                        ax.plot(tb, mdata[j, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
                                 rasterized=False, zorder=10)
                     if events is not None and j in list(events.keys()):
                         smpki = events[j][i]['smpksindex'][0]
@@ -1086,7 +1112,7 @@ class AnalyzeMap(object):
                         #     if tb[smpki][k] < 0.6:
                         #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
                         nevtimes += len(smpki)
-                        if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[0, i, smpki]) > 0:
+                        if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[j, i, smpki]) > 0:
                             # The following plot call causes problems if done rasterized.
                             # See: https://github.com/matplotlib/matplotlib/issues/12003
                             # may be fixed in the future. For now, don't rasterize.
@@ -1096,9 +1122,9 @@ class AnalyzeMap(object):
                             for iev in self.twin_resp:  # find events in all response windows
                                 tri = np.concatenate((tri.copy(), smpki[np.where((tb[smpki] >= iev[0]) & (tb[smpki] < iev[1]))[0]]), axis=0).astype(int)
                             ts2i = list(set(smpki) - set(tri.astype(int)).union(set(tsi.astype(int))))  # remainder of events (not spont, not possibly evoked)
-                            ms = np.array(mdata[0, i, tsi]).ravel() # spontaneous events
-                            mr = np.array(mdata[0, i, tri]).ravel() # response in window
-                            ms2 = np.array(mdata[0, i, ts2i]).ravel() # events not in spont and outside window
+                            ms = np.array(mdata[j, i, tsi]).ravel() # spontaneous events
+                            mr = np.array(mdata[j, i, tri]).ravel() # response in window
+                            ms2 = np.array(mdata[j, i, ts2i]).ravel() # events not in spont and outside window
                             spont_ev_count += ms.shape[0]
                             cr = CM.to_rgba('r', alpha=0.6)  # just set up color for markers
                             ck = CM.to_rgba('k', alpha=1.0)
@@ -1113,7 +1139,7 @@ class AnalyzeMap(object):
             print(f"      SPONTANEOUS Event Count: {spont_ev_count:d}")
         else:
             for j in range(mdata.shape[0]):
-                if tb.shape[0] > 0 and mdata[0,trsel,:].shape[0] > 0:
+                if tb.shape[0] > 0 and mdata[j,trsel,:].shape[0] > 0:
                     ax.plot(tb, mdata[0, trsel, :]*self.scale_factor, linewidth=0.2,
                             rasterized=False, zorder=10)
             PH.clean_axes(ax)
@@ -1340,9 +1366,11 @@ class AnalyzeMap(object):
         vmax = np.max(np.max(measure[measuretype]))
         vmin = np.min(np.min(measure[measuretype]))
         # print('vmax: ', vmin, vmax)
+        if vmax < 6.0:
+            vmax = 6.0  # force a fixed
         scaler = PH.NiceScale(0, vmax)
         vmax = scaler.niceMax
-
+        # print('vmax: ', vmax)
         if whichstim >= 0:  # which stim of -1 is ALL stimuli
             whichmeasures = [whichstim]
         elif average:
@@ -1350,25 +1378,45 @@ class AnalyzeMap(object):
             measure[measuretype][0] = np.mean(measure[measuretype])  # just
         else:
             whichmeasures = range(len(measure[measuretype]))
-
+        norm = matplotlib.colors.Normalize(vmin=0, vmax=vmax)
+        # red_rgba = matplotlib.colors.to_rgba('r')
+        # black_rgba = matplotlib.colors.to_rgba('k')
+        cmx = matplotlib.cm.ScalarMappable(norm=norm, cmap=cm_sns)
         for im in whichmeasures:  # there may be multiple measure[measuretype]s (repeated stimuli of different kinds) in a map
             # note circle size is radius, and is set by the laser spotsize (which is diameter)
             radw = np.ones(pos.shape[0])*spotsizes[im]
             radh = np.ones(pos.shape[0])*spotsizes[im]
-            cmx = matplotlib.cm.ScalarMappable(norm=None, cmap=cm_sns)
-            spotcolors = cmx.to_rgba(np.clip(measure[measuretype][im]/vmax, 0., 1.))
-         #   colors = self.clip_colors(colors, [1., 1., 1., 1.])
+            spotcolors = cmx.to_rgba(np.clip(measure[measuretype][im], 0., vmax))
+            edgecolors = spotcolors.copy()
+            
+            for i in range(len(measure[measuretype][im])):
+                em = measure[measuretype][im][i]
+                if em < 1.96:
+                    spotcolors[i][3] = em/1.96 # scale down
+                    edgecolors[i] = matplotlib.colors.to_rgba([0.2, 0.2, 0.2, 0.5])
+                #     print(' .. ', spotcolors[i])
+            order = np.argsort(measure[measuretype][im])  # plot from smallest to largest (so largest on top)
+            # for i, p in enumerate(pos[order]):  # just checking - it appears in one map.
+            #     if p[0] > 55.2 and p[1] < 3.45:
+            #         print('wayward: ', i, p)
+            #   colors = self.clip_colors(colors, [1., 1., 1., 1.])
             if self.nreps == 1:
-                ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos, units='xy', transOffset=axp.transData,
-                        facecolor=spotcolors, edgecolor='k', linewidth=0.2, alpha=1.0)
+                ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos[order], units='xy', transOffset=axp.transData,
+                        facecolor=spotcolors[order], edgecolor=edgecolors[order], linewidth=0.02)
                 axp.add_collection(ec)
+                # for o in order:
+                #     print('m: ', measure[measuretype][im][o]/vmax, spotcolors[o])
             else:  # make arcs within the circle, each for a repeat
+                # these were averaged across repetitions (see Zscore, Q, etc above), so nreps is 1
+                # maybe later don't average and store ZScore per map trial.
+                # print(self.nreps)
+                nrep = 1
                 ic = 0
                 npos = pos.shape[0]
-                dtheta = 360./self.nreps
+                dtheta = 360./nrep
                 ri = 0
-                rs = int(npos/self.nreps)
-                for nr in range(self.nreps):
+                rs = int(npos/nrep)
+                for nr in range(nrep):
                     ec = wedges(pos[ri:(ri+rs),0], pos[ri:(ri+rs),1], radw[ri:(ri+rs)]/2.0,
                         theta1=nr*dtheta, theta2=(nr+1)*dtheta,
                         color=spotcolors[ri:ri+rs])
@@ -1378,6 +1426,7 @@ class AnalyzeMap(object):
             print('Cell marker')
             axp.plot([-cmrk, cmrk], [0., 0.], '-', color='r') # cell centered coorinates
             axp.plot([0., 0.], [-cmrk, cmrk], '-', color='r') # cell centered coorinates
+        
 
         tickspace = scaler.tickSpacing
         try:
@@ -1386,8 +1435,8 @@ class AnalyzeMap(object):
             ntick = 3
         ticks = np.linspace(0, vmax, num=ntick, endpoint=True)
         if axcbar is not None:
-            norm = matplotlib.colors.Normalize(vmin=0, vmax=vmax)
             c2 = matplotlib.colorbar.ColorbarBase(axcbar, cmap=cm_sns, ticks=ticks, norm=norm)
+            c2.ax.plot([0, 10], [1.96, 1.96], 'w-')
             c2.ax.tick_params(axis='y', direction='out')
        # axp.scatter(pos[:,0], pos[:,1], s=2, marker='.', color='k', zorder=4)
         axr = 250.
