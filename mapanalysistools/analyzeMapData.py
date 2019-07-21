@@ -54,6 +54,14 @@ colormapname = 'parula'
 colors = {'red': '\x1b[31m', 'yellow': '\x1b[33m', 'green': '\x1b[32m', 'magenta': '\x1b[35m',
               'blue': '\x1b[34m', 'cyan': '\x1b[36m' , 'white': '\x1b[0m', 'backgray': '\x1b[100m'}
 
+def cprint(c, txt):
+    """
+    color print: one line
+    """
+    if not isinstance(txt, str):
+        txt = str(txt)
+    print(f"{colors[c]:s}{txt:s}{colors['white']:s}")
+
 basedir = "/Users/pbmanis/Desktop/Python/mapAnalysisTools"
 
 re_degree = re.compile('\s*(\d{1,3}d)\s*')
@@ -178,10 +186,14 @@ class AnalyzeMap(object):
         self.SP = EP.SpikeAnalysis.SpikeAnalysis()
         self.RM = EP.RmTauAnalysis.RmTauAnalysis()
         self.MT = MONT.montager.Montager()
+        self.verbose = True
         self.last_dataset = None
         self.last_results = None
+        self.LPF_flag = False
         self.LPF = 5000.
-        self.notch = False
+        self.HPF_flag = False
+        self.HPF = 0.
+        self.notch_flag = False
         self.notch_freqs = [60., 120., 180., 240.]
         self.notch_Q = 90.
         self.lbr_command = False  # laser blue raw waveform (command)
@@ -205,7 +217,7 @@ class AnalyzeMap(object):
         self.noderivative_artifact = True  # normally
         self.sd_thr = 3.0  # threshold in sd for diff based artifact suppression.
         self.template_file = None
-        self.stepi = 50.
+        self.stepi = 25.
         self.datatype = 'I'  # 'I' or 'V' for Iclamp or Voltage Clamp
         self.rasterized = rasterize
         self.methodname = 'aj'  # default event detector
@@ -214,12 +226,18 @@ class AnalyzeMap(object):
         self.MA = minis.minis_methods.MiniAnalyses()  # get a minianalysis instance
 
     def set_notch(self, notch, freqs=[60], Q=90.):
-        self.notch = notch
+        self.notch_flag = notch
         self.notch_freqs = freqs
         self.notch_Q = Q
 
     def set_LPF(self, LPF):
         self.LPF = LPF
+        self.LPF_flag = True
+
+    def set_HPF(self, HPF):
+        self.HPF = HPF
+        if HPF > 0:
+            self.HPF_flag = True
 
     def set_rasterized(self, rasterized=False):
         self.rasterized = rasterized
@@ -229,6 +247,8 @@ class AnalyzeMap(object):
             self.methodname = 'aj'
         elif methodname in ['cb', 'CB']:
             self.methodname = 'cb'
+        elif methodname in ['zc', 'ZC']:
+            self.methodname = 'zc'
         else:
             raise ValueError("Selected event detector %s is not valid" % methodname)
 
@@ -257,7 +277,7 @@ class AnalyzeMap(object):
     def readProtocol(self, protocolFilename, records=None, sparsity=None, getPhotodiode=False):
         starttime = timeit.default_timer()
         self.protocol = protocolFilename
-        print('Protocol: ', protocolFilename)
+        print('Reading Protocol: ', protocolFilename)
         self.AR.setProtocol(protocolFilename)
         if not self.AR.getData():
             print('  >>No data found in protocol: %s' % protocolFilename)
@@ -471,45 +491,54 @@ class AnalyzeMap(object):
 
     def filter_data(self, tb, data):
         filtfunc = scipy.signal.filtfilt
-        rate = np.mean(np.diff(tb))  # t is in seconds, so freq is in Hz
-        self.rate = rate
-        samplefreq = 1.0/rate
+        samplefreq = 1.0/self.rate
         nyquistfreq = samplefreq/1.95
         wn = self.LPF/nyquistfreq
         b, a = scipy.signal.bessel(2, wn)
-        if self.notch:
-            print(self.colors['yellow']+'Notch Filtering', self.notch_freqs, self.colors['white'])
+        if self.HPF_flag:
+            wnh = self.HPF/nyquistfreq
+            bh, ah = scipy.signal.bessel(2, wnh, btype='highpass')
         imax = int(max(np.where(tb < self.maxtime)[0]))
         # imax = len(tb)
         data2 = np.zeros_like(data)
         if data.ndim == 3:
+            if self.notch_flag:
+                print(self.colors['yellow']+'Notch Filtering Enabled:', self.notch_freqs, self.colors['white'])
             for r in range(data.shape[0]):
                 for t in range(data.shape[1]):
-                    data2[r,t,:imax] = filtfunc(b, a, data[r, t, :imax] - np.mean(data[r, t, 0:250]))
-                    if self.notch:
-                        data2[r,t,:imax] = FILT.NotchFilterZP(data[r, t, :imax], notchf=self.notch_freqs, Q=self.notch_Q,
+                    data2[r,t,:imax] = filtfunc(b, a, data[r, t, :imax]) #  - np.mean(data[r, t, 0:250]))
+                    if self.HPF_flag:
+                        data2[r,t,:imax] = filtfunc(bh, ah, data2[r, t, :imax]) #  - np.mean(data[r, t, 0:250]))
+                        
+                    if self.notch_flag:
+                        data2[r,t,:imax] = FILT.NotchFilterZP(data2[r, t, :imax], notchf=self.notch_freqs, Q=self.notch_Q,
                             QScale=False, samplefreq=samplefreq)
         else:
-            data2= filtfunc(b, a, data - np.mean(data[0:250]))
-            if self.notch:
-                data2 = FILT.NotchFilterZP(data, notchf=self.notch_freqs, Q=self.notch_Q,
+            data2 = filtfunc(b, a, data - np.mean(data[0:250]))
+            if self.HPF_flag:
+                data2[r,t,:imax] = filtfunc(bh, ah, data2[r, t, :imax]) #  - np.mean(data[r, t, 0:250]))
+            if self.notch_flag:
+                if self.notch_flag:
+                    print(self.colors['yellow']+'Notch Filtering Enabled', self.notch_freqs, self.colors['white'])
+                data2 = FILT.NotchFilterZP(data2, notchf=self.notch_freqs, Q=self.notch_Q,
                     QScale=False, samplefreq=samplefreq)
         
-        # if self.notch:
-        #     f, ax = mpl.subplots(1,1)
-        #     f.set_figheight(14.)
-        #     f.set_figwidth(8.)
-        #     # ax = ax.ravel()
-        #     for i in range(data.shape[-2]):
-        #         ax.plot(tb[:imax], data[0, i,:imax]+i*50e-12, color='grey', linewidth=0.5)
-        #         ax.plot(tb[:imax], data2[0, i,:imax]+i*50e-12, 'r-', linewidth=0.3)
-        #     f2, ax2 = mpl.subplots(1,1)
-        #     f2.set_figheight(8.)
-        #     f2.set_figwidth(8.)
-        #     ax2.magnitude_spectrum(data[0, 0, :imax], Fs=samplefreq, scale='dB', color='k')
-        #     ax2.magnitude_spectrum(data2[0, 0, :imax], Fs=samplefreq, scale='dB', color='r')
-        #     ax2.set_xlim(0., 500.)
-        #     mpl.show()
+        # if self.notch_flag:  ### DO NOT USE THIS WHEN RUNNING PARALLEL MODE
+            # f, ax = mpl.subplots(1,1)
+            # f.set_figheight(14.)
+            # f.set_figwidth(8.)
+            # # ax = ax.ravel()
+            # for i in range(data.shape[-2]):
+            #     ax.plot(tb[:imax], data[0, i,:imax]+i*50e-12, color='grey', linewidth=0.5)
+            #     ax.plot(tb[:imax], data2[0, i,:imax]+i*50e-12, 'r-', linewidth=0.3)
+            # f2, ax2 = mpl.subplots(1,1)
+            # f2.set_figheight(8.)
+            # f2.set_figwidth(8.)
+            # ax2.magnitude_spectrum(data[0, 0, :imax], Fs=samplefreq, scale='dB', color='k')
+            # ax2.magnitude_spectrum(data2[0, 0, :imax], Fs=samplefreq, scale='dB', color='r')
+            # # ax2.set_xlim(0., 500.)
+            # mpl.show()
+            # exit()
         
         return data2
 
@@ -519,7 +548,8 @@ class AnalyzeMap(object):
         data_nostim is a list of points where the stimulus/response DOES NOT occur, so we can compute the SD
         for the threshold in a consistent manner if there are evoked responses in the trace.
         """
-
+        if self.verbose:
+            print('analyze protocol')
         rate = self.rate
         mdata = np.mean(data, axis=0)  # mean across ALL reps
 #        rate = rate*1e3  # convert rate to msec
@@ -572,26 +602,35 @@ class AnalyzeMap(object):
                     'eventstartthr': eventstartthr, 'data_nostim': data_nostim,
                     'eventlist': eventlist, 'nevents': nevents, 'tb': tb, 'testplots': testplots})
             events[jtrial] = res
-
+        if self.verbose:
+            print('  ALL trials in protocol analyzed')
         return{'Qr': Qr, 'Qb': Qb, 'ZScore': Zscore, 'I_max': I_max, 'positions': pos,
                'stimtimes': self.stimtimes, 'events': events, 'eventtimes': eventlist, 'dataset': dataset,
                'sign': self.sign, 'avgevents': avgevents, 'rate': rate, 'ntrials': data.shape[0]}
 
-    def analyze_one_map(self, dataset, plotevents=False, raster=False, noparallel=False):
-       # print('ANALYZE ONE MAP')
+    def analyze_one_map(self, dataset, plotevents=False, raster=False, noparallel=False, verbose=False):
+        self.verbose = verbose
+        if self.verbose:
+            cprint('red', '  ANALYZE ONE MAP')
         self.noparallel = noparallel
-        self.data, self.tb, pars, info=self.readProtocol(dataset, sparsity=None)
-        print('read data shape: ', self.data.shape)
+        self.data, self.tb, pars, info = self.readProtocol(dataset, sparsity=None)
+        if self.tb is None:
+            return None
+        self.rate = np.mean(np.diff(self.tb))  # t is in seconds, so freq is in Hz
         if self.data is None:   # check that we were able to retrieve data
             self.P = None
             return None
         self.last_dataset = dataset
-        print('Artifact Suppression: ', self.fix_artifact_flag)
         if self.fix_artifact_flag:
             self.data_clean, self.avgdata = self.fix_artifacts(self.data)
+            if self.verbose:
+                print(self.colors['cyan']+'Fixing Artifacts', self.colors['white'])
         else:
             self.data_clean = self.data
-        self.data_clean = self.filter_data(self.tb, self.data_clean)
+        if self.LPF_flag or self.notch_flag or self.HPF_flag:
+            if self.verbose:
+                print(self.colors['magenta']+'LPF Filtering', self.LPF, self.colors['white'])
+            self.data_clean = self.filter_data(self.tb, self.data_clean)
         
         stimtimes = []
         data_nostim = []
@@ -605,9 +644,12 @@ class AnalyzeMap(object):
         endindx = np.where(self.tb >= self.AR.tstart)[0][0]
         data_nostim.append(list(range(lastd, endindx)))
         data_nostim = list(np.hstack(np.array(data_nostim)))
-        print('data shape going into analyze_protocol: ', self.data_clean.shape)
+        if self.verbose:
+            print('data shape going into analyze_protocol: ', self.data_clean.shape)
         results = self.analyze_protocol(self.data_clean, self.tb, info, eventhist=True, dataset=dataset, data_nostim=data_nostim)
         self.last_results = results
+        if self.verbose:
+            print('MAP Analyzed')
         return results
 
     def analyze_one_trial(self, data, pars=None):
@@ -618,7 +660,9 @@ class AnalyzeMap(object):
             Dictionary with the following entries:
                 rate, jtrial, tmaxev, evenstartthr, data-nostim, eventlist, nevents, tb, testplots
         """
-        nworkers = 16
+        if self.verbose:
+            print('   analyzeone trial')
+        nworkers = 7
         tasks = range(data.shape[0])  # number of tasks that will be needed is number of targets
         result = [None] * len(tasks)  # likewise
         results = {}
@@ -635,6 +679,8 @@ class AnalyzeMap(object):
             for itarget in range(data.shape[0]):
                 results[itarget] = self.analyze_one_trace(data[itarget], itarget, pars=pars)
             # print('Result keys no parallel: ', results.keys())
+        if self.verbose:
+            print('trial analyzed')
         return results
 
     def analyze_one_trace(self, data, itarget, pars=None):
@@ -647,6 +693,8 @@ class AnalyzeMap(object):
             The trace for just one target
 
         """
+        if self.verbose:
+            print('      analyze one trace')
         jtrial = pars['jtrial']
         rate = pars['rate']
         jtrial = pars['jtrial']
@@ -678,15 +726,18 @@ class AnalyzeMap(object):
         spont_ev = []
         order = []
         nevents = 0
+        if tmaxev > 0.6:  # block step information
+            tmaxev = 0.6
+        idmax = int(self.maxtime/rate)
 
         if self.methodname == 'aj':
             aj = minis_methods.AndradeJonas()
-            jmax = int(tmaxev/rate)
+            jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
             aj.setup(tau1=self.taus[0], tau2=self.taus[1], dt=rate, delay=0.0, template_tmax=rate*(jmax-1),
                     sign=self.sign, eventstartthr=eventstartthr)
             idata = data.view(np.ndarray) # [jtrial, itarget, :]
             meandata = np.mean(idata[:jmax])
-            aj.deconvolve(idata[:jmax]-meandata, data_nostim=data_nostim,
+            aj.deconvolve(idata[:idmax]-meandata, data_nostim=data_nostim,
                     thresh=self.threshold, llambda=1., order=7)  # note threshold scaling...
             method = aj
         elif self.methodname == 'cb':
@@ -696,13 +747,27 @@ class AnalyzeMap(object):
                     sign=self.sign, eventstartthr=eventstartthr)
             idata = data.view(np.ndarray)# [jtrial, itarget, :]
             meandata = np.mean(idata[:jmax])
-            cb.cbTemplateMatch(idata-meandata, threshold=self.threshold)
+            cb.cbTemplateMatch(idata[:idmax]-meandata, threshold=self.threshold)
             # result.append(res)
             # crit.append(cb.Crit)
             # scale.append(cb.Scale)
             method = cb
+        elif self.methodname == 'zc':
+            zc = minis_methods.ZCFinder()
+            zc.setup(dt=rate, tau1=self.taus[0], tau2=self.taus[1], sign=self.sign)
+            idata = data.view(np.ndarray)# [jtrial, itarget, :]
+            jmax = int((2*self.taus[0] + 3*self.taus[1])/rate)
+            meandata = np.mean(idata[:jmax])
+            tminlen = self.taus[0]+self.taus[1]
+            iminlen = int(tminlen/rate)
+
+            zc.find_events(idata[:idmax]-meandata, data_nostim=None, 
+                            minPeak=self.threshold*1e-12, minSum=self.threshold*1e-12*iminlen,
+                            thresh=None, minLength=iminlen)
+            method = zc
+            
         else:
-            raise ValueError(f'analyzeMapData:analyzeOneTrace: Method <{self.methodname:s}> is not valid (use "aj" or "cb")')
+            raise ValueError(f'analyzeMapData:analyzeOneTrace: Method <{self.methodname:s}> is not valid (use "aj" or "cb" or "zc")')
 
         # filter out events at times of stimulus artifacts
         # build array of artifact times first
@@ -784,6 +849,8 @@ class AnalyzeMap(object):
             'avgevent': avgev, 'avgtb': avgtb, 'avgnpts': avgnpts, 'avgevoked': avg_evoked, 'avgspont': avg_spont, 'aveventtb': txb,
             'fit_tau1': fit_tau1, 'fit_tau2': fit_tau2, 'fit_amp': fit_amp, 'spont_dur': spont_dur, 'ntraces': 1,
             'evoked_ev': evoked_ev, 'spont_ev': spont_ev, 'measures': measures, 'nevents': nevents}
+        if self.verbose:
+            print('      --trace analyzed')
         return res
 
     def scale_and_rotate(self, poslist, sign=[1., 1.], scaleCorr=1., scale=1e6, autorotate=False, angle=0.):
@@ -818,7 +885,7 @@ class AnalyzeMap(object):
 
         """
         testplot = False
-        print('fixing artifacts')
+        print('Fixing artifacts')
         avgd = data.copy()
         while avgd.ndim > 1:
             avgd = np.mean(avgd, axis=0)
@@ -1091,6 +1158,7 @@ class AnalyzeMap(object):
             axh.set_xlim(0., self.AR.tstart-0.005)
 
     def plot_stacked_traces(self, tb, mdata, title, results, ax=None, trsel=None):
+        print('start stack plot')
         if ax is None:
             f, ax = mpl.subplots(1,1)
             self.figure_handle = f
@@ -1098,12 +1166,12 @@ class AnalyzeMap(object):
         # print('event keys: ', events.keys())
         nevtimes = 0
         spont_ev_count = 0
-        print('trsel,mdata.shape: ', trsel, mdata.shape)
+        itmax = int(self.maxtime/np.mean(np.diff(self.tb)))
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
                     if tb.shape[0] > 0 and mdata[j,i,:].shape[0] > 0:
-                        ax.plot(tb, mdata[j, i, :]*self.scale_factor + self.stepi*i, linewidth=0.2,
+                        ax.plot(tb[:itmax], mdata[j, i, :itmax]*self.scale_factor + self.stepi*i, linewidth=0.2,
                                 rasterized=False, zorder=10)
                     if events is not None and j in list(events.keys()):
                         smpki = events[j][i]['smpksindex'][0]
@@ -1140,7 +1208,7 @@ class AnalyzeMap(object):
         else:
             for j in range(mdata.shape[0]):
                 if tb.shape[0] > 0 and mdata[j,trsel,:].shape[0] > 0:
-                    ax.plot(tb, mdata[0, trsel, :]*self.scale_factor, linewidth=0.2,
+                    ax.plot(tb[:itmax], mdata[0, trsel, :itmax]*self.scale_factor, linewidth=0.2,
                             rasterized=False, zorder=10)
             PH.clean_axes(ax)
             PH.calbar(ax, calbar=[0.6, -200e-12*self.scale_factor, 0.05, 100e-12*self.scale_factor],
@@ -1166,7 +1234,7 @@ class AnalyzeMap(object):
     def plot_avgevent_traces(self, evtype, mdata=None, trace_tb=None, events=None, ax=None, scale=1.0, label='pA', rasterized=False):
 
         if events is None or ax is None or trace_tb is None:
-            print(' no events or no axis or no time base')
+            print(' no events, no axis, or no time base')
             return
         nevtimes = 0
         line = {'avgevoked': 'k-', 'avgspont': 'k-'}
@@ -1192,10 +1260,11 @@ class AnalyzeMap(object):
         spont_ev_count = 0
         evoked_ev_count = 0
         npev = 0
+        # tau1 = self.MA.fitresult[1]  # get rising tau so we can make a logical tpre
         for trial in range(mdata.shape[0]):
             tb0 = events[trial][0]['aveventtb']  # get from first trace
             rate = np.mean(np.diff(tb0))
-            tpre = 0.002 # 0.1*np.max(tb0)
+            tpre = 0.1*np.max(tb0)
             tpost = np.max(tb0)
             ipre = int(tpre/rate)
             ipost = int(tpost/rate)
@@ -1205,31 +1274,37 @@ class AnalyzeMap(object):
             # for itrace in events[trial].keys():  # traces in the evtype list
             for itrace in range(mdata.shape[1]):  # traces in the evtype list
                 if events is None or trial not in list(events.keys()):
-                    print('NO EVENTS NO KEYS: ', itrace)
+                    if self.verbose:
+                        print(f'     NO EVENTS in trace: {itrace:4d}')
                     continue
                 evs = events[trial][itrace][result_names[evtype]]
                 if len(evs[0]) == 0:  # skip trace if there are NO events
+                    if self.verbose: 
+                        print(f'     NO EVENTS of type {evtype:10s} in trace: {itrace:4d}')
                     continue
                 # print('evs: ', evs)
 
-                sd = events[trial][itrace]['spont_dur'][0]
+                spont_dur = events[trial][itrace]['spont_dur'][0]
                 # print(' plotting evdata: trial, nev, prot: ', evtype, trial, itrace, len(evs[0][1]), self.protocol)
-                for jevent in evs[0][1]: # evs is 2 element array: [0] are onsets and [1] is peak; this aligns to onsets
+                for jevent in evs[0][0]: # evs is 2 element array: [0] are onsets and [1] is peak; this aligns to onsets
                     # print('  jevent: ', jevent)
                     # if len(evs[jevent]) == 0 or len(evs[jevent][0]) == 0:
                     #     continue
                     if evtype == 'avgspont':
                         spont_ev_count += 1
-                        if trace_tb[jevent] + self.spont_deadtime > sd:  # remove events that cross into stimuli
-                            # print('1')
+                        if trace_tb[jevent] + self.spont_deadtime > spont_dur:  # remove events that cross into stimuli
+                            if self.verbose:
+                                print(f"     Event {jevent:6d} in trace {itrace:4d} crosses into stimulus")
                             continue
                     if evtype == 'avgevoked':
                         evoked_ev_count += 1
-                        if trace_tb[jevent] <= sd:  # only post events
-                            # print('2 ', trace_tb[jevent], sd)
+                        if trace_tb[jevent] <= spont_dur:  # only post events
+                            if self.verbose:
+                                print(f"     Event in spont window, not plotting as evoked: {jevent:6d} [t={float(jevent*rate):8.3f}] trace: {itrace:4d}")
                             continue
                     if jevent-ipre < 0:  # event to be plotted would go before start of trace
-                        # print('3')
+                        if self.verbose:
+                            print(f"     Event starts too close to trace start {jevent:6d} trace: {itrace:4d}")
                         continue
                     evdata = mdata[trial, itrace, jevent-ipre:jevent+ipost].copy()  # 0 is onsets
                     bl = np.mean(evdata[0:ipre-ptfivems])
@@ -1257,7 +1332,7 @@ class AnalyzeMap(object):
         tb = tb[:len(avedat)]
         avebl = np.mean(avedat[:ptfivems])
         avedat = avedat - avebl
-        self.MA.fit_average_event(tb, avedat, debug=False, label='Map average')
+        self.MA.fit_average_event(tb, avedat, debug=False, label='Map average', inittaus=self.taus, initdelay=tpre)
         Amplitude = self.MA.fitresult[0]
         tau1 = self.MA.fitresult[1]
         tau2 = self.MA.fitresult[2]
@@ -1280,10 +1355,10 @@ class AnalyzeMap(object):
         # print('ylims: ', ylims)
         if evtype=='avgspont':
             PH.calbar(ax, calbar=[np.max(tb)-2., ylims[0], 2.0, self.get_calbar_Yscale(np.fabs(ylims[1]-ylims[0])/4.)],
-                axesoff=True, orient='left', unitNames={'x': 'ms', 'y': 'pA'}, fontsize=11, weight='normal', font='Arial')
+                axesoff=True, orient='left', unitNames={'x': 'ms', 'y': label}, fontsize=11, weight='normal', font='Arial')
         elif evtype=='avgevoked':
             PH.calbar(ax, calbar=[np.max(tb)-2., ylims[0], 2.0, self.get_calbar_Yscale(maxev/4.)],
-                axesoff=True, orient='left', unitNames={'x': 'ms', 'y': 'pA'}, fontsize=11, weight='normal', font='Arial')
+                axesoff=True, orient='left', unitNames={'x': 'ms', 'y': label}, fontsize=11, weight='normal', font='Arial')
 
     def plot_average_traces(self, ax, tb, mdata, color='k'):
         """
@@ -1401,12 +1476,15 @@ class AnalyzeMap(object):
             #         print('wayward: ', i, p)
             #   colors = self.clip_colors(colors, [1., 1., 1., 1.])
             if self.nreps == 1:
+                # concentric circles (overlaid ellipses) showing the response measure for
+                # each stimulus. Organization is outside-in first to last stimulus
                 ec = collections.EllipseCollection(radw, radh, np.zeros_like(radw), offsets=pos[order], units='xy', transOffset=axp.transData,
                         facecolor=spotcolors[order], edgecolor=edgecolors[order], linewidth=0.02)
                 axp.add_collection(ec)
                 # for o in order:
                 #     print('m: ', measure[measuretype][im][o]/vmax, spotcolors[o])
-            else:  # make arcs within the circle, each for a repeat
+            else:
+                # make arcs within the circle, each arc is for different trial
                 # these were averaged across repetitions (see Zscore, Q, etc above), so nreps is 1
                 # maybe later don't average and store ZScore per map trial.
                 # print(self.nreps)
@@ -1423,7 +1501,7 @@ class AnalyzeMap(object):
                     axp.add_collection(ec)
                     ri += rs
         if cellmarker:
-            print('Cell marker')
+            cprint('yellow', 'Cell marker is plotted')
             axp.plot([-cmrk, cmrk], [0., 0.], '-', color='r') # cell centered coorinates
             axp.plot([0., 0.], [-cmrk, cmrk], '-', color='r') # cell centered coorinates
         
@@ -1467,7 +1545,7 @@ class AnalyzeMap(object):
             results = self.last_results
         if results is None:
             return
-        if '_IC_' in str(dataset.name) or 'CC' in str(dataset.name) or self.datatype == 'I':
+        if '_IC' in str(dataset.name) or 'CC' in str(dataset.name) or self.datatype == 'I':
             scf = 1e3
             label = 'mV'  # mV
         elif ('_VC' in str(dataset.name)) or ('VGAT_5ms' in str(dataset.name)) or ('WCChR2' in str(dataset.name)) or (self.datatype == 'V'):
@@ -1534,7 +1612,6 @@ class AnalyzeMap(object):
         else:
             cbar = None
         idm = self.mapfromid[ident]
-
         if self.AR.spotsize == None:
             self.AR.spotsize=50e-6
         self.newvmax = np.max(results[measuretype])

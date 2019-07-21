@@ -102,14 +102,16 @@ def SignalFilter_LPFBessel(signal, LPF, samplefreq, NPole=8, reduce=False):
     if reduce:
         if LPF <= samplefreq/2.0:
             reduction = int(samplefreq/LPF)
-    filter_b,filter_a=spSignal.bessel(
+    
+    filter_b, filter_a = spSignal.bessel(
             NPole,
             wn,
             btype = 'low',
             output = 'ba')
     if signal.ndim == 1:
         sm = np.mean(signal)
-        w = spSignal.lfilter(filter_b, filter_a, signal-sm) # filter the incoming signal
+        sm2 = signal - sm
+        w = spSignal.lfilter(filter_b, filter_a, sm2) # filter the incoming signal
         w = w + sm
         if reduction > 1:
             w = spSignal.resample(w, reduction)
