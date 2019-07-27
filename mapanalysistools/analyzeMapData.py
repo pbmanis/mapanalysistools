@@ -577,7 +577,7 @@ class AnalyzeMap(object):
                 print(self.colors['red']+('Failed to establish position for t=%d, ix=%d of max values %d,  protocol: %s' %
                     (t, ix, pmax,  self.protocol))+self.colors['white'])
                 raise ValueError()
-
+        print('Position in analyze protocol: ', pos)
         nr = 0
 
         key1=[]
@@ -1166,7 +1166,8 @@ class AnalyzeMap(object):
         # print('event keys: ', events.keys())
         nevtimes = 0
         spont_ev_count = 0
-        itmax = int(self.maxtime/np.mean(np.diff(self.tb)))
+        dt = np.mean(np.diff(self.tb))
+        itmax = int(self.maxtime/dt)
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
@@ -1175,8 +1176,12 @@ class AnalyzeMap(object):
                                 rasterized=False, zorder=10)
                     if events is not None and j in list(events.keys()):
                         smpki = events[j][i]['smpksindex'][0]
+                        # print('smpki: ', smpki)
+                        if len(events[j][i]['peaktimes'][0]) == 0:
+                            continue
+                        smpki = events[j][i]['peaktimes'][0] # actually, indices, not times
                         # print('events[j,i].keys: ', events[j][i].keys())
-                        # for k in range(len(smpki)):
+                        # exit()# for k in range(len(smpki)):
                         #     if tb[smpki][k] < 0.6:
                         #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
                         nevtimes += len(smpki)
