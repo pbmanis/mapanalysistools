@@ -214,6 +214,8 @@ class AnalyzeMap(object):
         self.overlay_scale = 0.
         self.shutter_artifact = [0.055]
         self.artifact_suppress = True
+        self.artifact_duration = 2.0
+        self.stimdur = None
         self.noderivative_artifact = True  # normally
         self.sd_thr = 3.0  # threshold in sd for diff based artifact suppression.
         self.template_file = None
@@ -265,6 +267,12 @@ class AnalyzeMap(object):
             raise ValueError('analyzeMapData: artifact suppresion must be True or False')
         self.artifact_suppress = suppr
         self.fix_artifact_flag = suppr
+
+    def set_artifact_duration(self, duration=2.0):
+        self.artifact_duration = duration
+
+    def set_stimdur(self, duration=None):
+        self.stimdur = duration
 
     def set_noderivative_artifact(self, suppr=True):
         if not isinstance(suppr, bool):
@@ -577,7 +585,7 @@ class AnalyzeMap(object):
                 print(self.colors['red']+('Failed to establish position for t=%d, ix=%d of max values %d,  protocol: %s' %
                     (t, ix, pmax,  self.protocol))+self.colors['white'])
                 raise ValueError()
-        print('Position in analyze protocol: ', pos)
+        # print('Position in analyze protocol: ', pos)
         nr = 0
 
         key1=[]
@@ -781,13 +789,20 @@ class AnalyzeMap(object):
                     continue
                 art_starts.append(s)
                 if isinstance(self.stimtimes['duration'], float):
-                    art_starts.append(s+self.stimtimes['duration'])
+                    if self.stimdur is None:  # allow override 
+                        art_starts.append(s+self.stimtimes['duration'])
+                    else:
+                        art_starts.append(s+self.stimdur)
+                        
                 else:
-                    art_starts.append(s+self.stimtimes['duration'][si])
+                    if self.stimdur is None:
+                        art_starts.append(s+self.stimtimes['duration'][si])
+                    else:
+                        art_starts.append(s+self.stimdur)
                 art_durs.append(2.*rate)
                 art_durs.append(2.*rate)
-        # print('art starts: ', art_starts)
-        # print(' durs: ', art_durs)
+        # if self.stimdur is not None:
+        #     print('used custom stimdur: ', self.stimdur)
         npk0 = self.select_events(method.smpkindex, art_starts, art_durs, rate, mode='reject')
         npk4 = self.select_by_sign(method, npk0, idata, min_event=5e-12)  # events must also be of correct sign and min magnitude
         npk = list(set(npk0).intersection(set(npk4))) # only all peaks that pass all tests
@@ -907,7 +922,7 @@ class AnalyzeMap(object):
             if protocol.find('_VC_10Hz') > 0:
                 template_file = 'template_data_map_10Hz.pkl'
                 ptype = '10Hz'
-            elif protocol.find('_Single') > 0 or (protocol.find('_weird') > 0) or (protocol.find('_WCChR2')) > 0:
+            elif protocol.find('_single') > 0 or protocol.find('_Single') > 0 or (protocol.find('_weird') > 0) or (protocol.find('_WCChR2')) > 0:
                 template_file = 'template_data_map_Singles.pkl'
                 ptype = 'single'
         else:
@@ -950,7 +965,7 @@ class AnalyzeMap(object):
 
             art_times = np.append(art_times, other_arts)  # unknown (shutter is at 50 msec)
             art_durs = np.array(self.stimtimes['duration'])
-            other_artdurs = 0.002*np.ones_like(other_arts)
+            other_artdurs = self.artifact_duration*np.ones_like(other_arts)
             art_durs = np.append(art_durs, other_artdurs)  # shutter - do 2 msec
 
             for i in range(len(art_times)):
@@ -1140,12 +1155,14 @@ class AnalyzeMap(object):
         iev = 0
         for itrial in events.keys():
             for jtrace in events[itrial]:
+                # print('itrail, trace: ', itrial, jtrace)
                 ntrialev = len(events[itrial][jtrace]['onsets'][0])
-                # print(events[itrial][jtrace]['onsets'][0])
+                # print('has events: ', events[itrial][jtrace]['onsets'][0])
                 # print(iev, iev+ntrialev, eventtimes.shape, ntrialev)
                 eventtimes[iev:iev+ntrialev] = events[itrial][jtrace]['onsets'][0]
                 iev += ntrialev
-
+        print('total events: ', iev, ' # event times: ', len(eventtimes), plotevents)
+        
         if plotevents and len(eventtimes) > 0:
             nevents = 0
             y = np.array(eventtimes)*rate
@@ -1171,44 +1188,52 @@ class AnalyzeMap(object):
         if trsel is None:
             for j in range(mdata.shape[0]):
                 for i in range(mdata.shape[1]):
-                    if tb.shape[0] > 0 and mdata[j,i,:].shape[0] > 0:
-                        ax.plot(tb[:itmax], mdata[j, i, :itmax]*self.scale_factor + self.stepi*i, linewidth=0.2,
-                                rasterized=False, zorder=10)
+                    crflag = False  # indicates detected evoked response on a trace - used to increase salience in the plot
                     if events is not None and j in list(events.keys()):
                         smpki = events[j][i]['smpksindex'][0]
                         # print('smpki: ', smpki)
-                        if len(events[j][i]['peaktimes'][0]) == 0:
-                            continue
-                        smpki = events[j][i]['peaktimes'][0] # actually, indices, not times
-                        # print('events[j,i].keys: ', events[j][i].keys())
-                        # exit()# for k in range(len(smpki)):
-                        #     if tb[smpki][k] < 0.6:
-                        #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
-                        nevtimes += len(smpki)
-                        if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[j, i, smpki]) > 0:
-                            # The following plot call causes problems if done rasterized.
-                            # See: https://github.com/matplotlib/matplotlib/issues/12003
-                            # may be fixed in the future. For now, don't rasterize.
-                            sd = events[j][i]['spont_dur'][0]
-                            tsi = smpki[np.where(tb[smpki] < sd)[0].astype(int)]  # find indices of spontanteous events (before first stimulus)
-                            tri = np.ndarray(0)
-                            for iev in self.twin_resp:  # find events in all response windows
-                                tri = np.concatenate((tri.copy(), smpki[np.where((tb[smpki] >= iev[0]) & (tb[smpki] < iev[1]))[0]]), axis=0).astype(int)
-                            ts2i = list(set(smpki) - set(tri.astype(int)).union(set(tsi.astype(int))))  # remainder of events (not spont, not possibly evoked)
-                            ms = np.array(mdata[j, i, tsi]).ravel() # spontaneous events
-                            mr = np.array(mdata[j, i, tri]).ravel() # response in window
-                            ms2 = np.array(mdata[j, i, ts2i]).ravel() # events not in spont and outside window
-                            spont_ev_count += ms.shape[0]
-                            cr = CM.to_rgba('r', alpha=0.6)  # just set up color for markers
-                            ck = CM.to_rgba('k', alpha=1.0)
-                            cg = CM.to_rgba('gray', alpha=1.0)
+                        if len(events[j][i]['peaktimes'][0]) > 0:
+                            smpki = events[j][i]['peaktimes'][0] # actually, indices, not times
+                            # print('events[j,i].keys: ', events[j][i].keys())
+                            # exit()# for k in range(len(smpki)):
+                            #     if tb[smpki][k] < 0.6:
+                            #         print(f'tb, ev: {i:3d} {k:3d} {tb[smpki][k]:.4f}: {mdata[0,i,smpki][k]*1e12:.1f}')
+                            nevtimes += len(smpki)
+                            if len(smpki) > 0 and len(tb[smpki]) > 0 and len(mdata[j, i, smpki]) > 0:
+                                # The following plot call causes problems if done rasterized.
+                                # See: https://github.com/matplotlib/matplotlib/issues/12003
+                                # may be fixed in the future. For now, don't rasterize.
+                                sd = events[j][i]['spont_dur'][0]
+                                tsi = smpki[np.where(tb[smpki] < sd)[0].astype(int)]  # find indices of spontanteous events (before first stimulus)
+                                tri = np.ndarray(0)
+                                for iev in self.twin_resp:  # find events in all response windows
+                                    tri = np.concatenate((tri.copy(), smpki[np.where((tb[smpki] >= iev[0]) & (tb[smpki] < iev[1]))[0]]), axis=0).astype(int)
+                                ts2i = list(set(smpki) - set(tri.astype(int)).union(set(tsi.astype(int))))  # remainder of events (not spont, not possibly evoked)
+                                ms = np.array(mdata[j, i, tsi]).ravel() # spontaneous events
+                                mr = np.array(mdata[j, i, tri]).ravel() # response in window
+                                if len(mr) > 0:
+                                    crflag = True # flag traces with detected responses
+                                ms2 = np.array(mdata[j, i, ts2i]).ravel() # events not in spont and outside window
+                                spont_ev_count += ms.shape[0]
+                                cr = CM.to_rgba('r', alpha=0.6)  # just set up color for markers
+                                ck = CM.to_rgba('k', alpha=1.0)
+                                cg = CM.to_rgba('gray', alpha=1.0)
 
-                            ax.plot(tb[tsi], ms*self.scale_factor + self.stepi*i,
-                             'o', color=ck, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
-                            ax.plot(tb[tri], mr*self.scale_factor + self.stepi*i,
-                             'o', color=cr, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
-                            ax.plot(tb[ts2i], ms2*self.scale_factor + self.stepi*i,
-                             'o', color=cg, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                                ax.plot(tb[tsi], ms*self.scale_factor + self.stepi*i,
+                                 'o', color=ck, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                                ax.plot(tb[tri], mr*self.scale_factor + self.stepi*i,
+                                 'o', color=cr, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                                ax.plot(tb[ts2i], ms2*self.scale_factor + self.stepi*i,
+                                 'o', color=cg, markersize=2, markeredgecolor='None', zorder=0, rasterized=self.rasterized)
+                    if tb.shape[0] > 0 and mdata[j,i,:].shape[0] > 0:
+                        if crflag:
+                            alpha = 1.0
+                            lw = 0.5
+                        else:
+                            alpha = 0.5
+                            lw = 0.2
+                        ax.plot(tb[:itmax], mdata[j, i, :itmax]*self.scale_factor + self.stepi*i, linewidth=lw,
+                                rasterized=False, zorder=10, alpha=alpha)
             print(f"      SPONTANEOUS Event Count: {spont_ev_count:d}")
         else:
             for j in range(mdata.shape[0]):
@@ -1237,9 +1262,9 @@ class AnalyzeMap(object):
         return(sc[-1])
 
     def plot_avgevent_traces(self, evtype, mdata=None, trace_tb=None, events=None, ax=None, scale=1.0, label='pA', rasterized=False):
-
+        print('start avgevent plot for ', evtype)
         if events is None or ax is None or trace_tb is None:
-            print(' no events, no axis, or no time base')
+            print('evtype:  no events, no axis, or no time base', evtype)
             return
         nevtimes = 0
         line = {'avgevoked': 'k-', 'avgspont': 'k-'}
@@ -1266,7 +1291,10 @@ class AnalyzeMap(object):
         evoked_ev_count = 0
         npev = 0
         # tau1 = self.MA.fitresult[1]  # get rising tau so we can make a logical tpre
+        print('plotting # trials = ', mdata.shape[0])
         for trial in range(mdata.shape[0]):
+            if self.verbose:
+                print('plotting: trial: ', trial)
             tb0 = events[trial][0]['aveventtb']  # get from first trace
             rate = np.mean(np.diff(tb0))
             tpre = 0.1*np.max(tb0)
@@ -1314,11 +1342,15 @@ class AnalyzeMap(object):
                     evdata = mdata[trial, itrace, jevent-ipre:jevent+ipost].copy()  # 0 is onsets
                     bl = np.mean(evdata[0:ipre-ptfivems])
                     evdata -= bl
+                    if self.verbose:
+                        print('Len EVDATA: ', len(evdata), ' evdata 0:10', np.mean(evdata[:10]), ' evtype: ', evtype)
                     if len(evdata) > 0:
                         ave.append(evdata)
                         npev += 1
                         # and only plot when there is data, otherwise matplotlib complains with "negative dimension are not allowed" error
-                        ax.plot(tb[:len(evdata)]*1e3, scale*evdata, line[evtype], linewidth=0.1, alpha=0.25, rasterized=rasterized)
+                        if self.verbose:
+                            cprint('green', '   Plotting')
+                        ax.plot(tb[:len(evdata)]*1e3, scale*evdata, line[evtype], linewidth=0.15, alpha=0.25, rasterized=False)
                         minev = np.min([minev, np.min(scale*evdata)])
                         maxev = np.max([maxev, np.max(scale*evdata)])
             # print(f"      {evtype:s} Event Count in AVERAGE: {spont_ev_count:d}, len ave: {len(ave):d}")
@@ -1327,8 +1359,11 @@ class AnalyzeMap(object):
         # print('maxev, minev: ', maxev, minev)
         nev = len(ave)
         aved = np.asarray(ave)
-        if aved.shape[0] == 0:
+        if (len(aved) == 0) or (aved.shape[0] == 0) or (nev == 0):
             return
+        if self.verbose:
+                cprint('red', f"aved shape is {str(aved.shape):s}")
+                return
         tx = np.broadcast_to(tb, (aved.shape[0], tb.shape[0])).T
         if self.sign < 0:
             maxev = -minev
@@ -1355,9 +1390,9 @@ class AnalyzeMap(object):
         # ax.plot(tx, scale*ave.T, line[evtype], linewidth=0.1, alpha=0.25, rasterized=False)
         ax.plot(tb*1e3, scale*bfit, 'c', linestyle='-', linewidth=0.35, rasterized=self.rasterized)
         ax.plot(tb*1e3, scale*avedat, line[evtype], linewidth=0.625, rasterized=self.rasterized)
-            #ax.set_label(evtype)
+
+        #ax.set_label(evtype)
         ylims = ax.get_ylim()
-        # print('ylims: ', ylims)
         if evtype=='avgspont':
             PH.calbar(ax, calbar=[np.max(tb)-2., ylims[0], 2.0, self.get_calbar_Yscale(np.fabs(ylims[1]-ylims[0])/4.)],
                 axesoff=True, orient='left', unitNames={'x': 'ms', 'y': label}, fontsize=11, weight='normal', font='Arial')
@@ -1550,10 +1585,10 @@ class AnalyzeMap(object):
             results = self.last_results
         if results is None:
             return
-        if '_IC' in str(dataset.name) or 'CC' in str(dataset.name) or self.datatype == 'I':
+        if '_IC' in str(dataset.name) or '_CC' in str(dataset.name) or self.datatype == 'I':
             scf = 1e3
             label = 'mV'  # mV
-        elif ('_VC' in str(dataset.name)) or ('VGAT_5ms' in str(dataset.name)) or ('WCChR2' in str(dataset.name)) or (self.datatype == 'V'):
+        elif ('_VC' in str(dataset.name)) or ('VGAT_5ms' in str(dataset.name)) or ('_WCChR2' in str(dataset.name)) or (self.datatype == 'V'):
             scf = 1e12 # pA, vc
             label = 'pA'
         else:
