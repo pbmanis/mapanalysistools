@@ -734,8 +734,8 @@ class AnalyzeMap(object):
         spont_ev = []
         order = []
         nevents = 0
-        if tmaxev > 0.6:  # block step information
-            tmaxev = 0.6
+        if tmaxev > self.maxtime:  # block step information
+            tmaxev = self.maxtime
         idmax = int(self.maxtime/rate)
 
         if self.methodname == 'aj':
