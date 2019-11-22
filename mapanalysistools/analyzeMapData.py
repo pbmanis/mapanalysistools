@@ -206,7 +206,7 @@ class AnalyzeMap(object):
         # set some defaults - these will be overwrittein with readProtocol
         self.twin_base = [0., 0.295]
         self.twin_resp = [[0.300+self.direct_window, 0.300 + self.response_window]]
-        self.maxtime = 0.599
+        self.maxtime = 0.999
        # self.taus = [0.5, 2.0]
         self.taus = [0.0002, 0.005]
         self.threshold = 3.0
