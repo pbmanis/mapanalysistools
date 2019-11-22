@@ -185,7 +185,8 @@ class AnalyzeMap(object):
         self.AR = EP.acq4read.Acq4Read()
         self.SP = EP.SpikeAnalysis.SpikeAnalysis()
         self.RM = EP.RmTauAnalysis.RmTauAnalysis()
-        self.MT = MONT.montager.Montager()
+        # self.MT = MONT.montager.Montager()
+        self.MT = None
         self.verbose = True
         self.last_dataset = None
         self.last_results = None
@@ -1638,9 +1639,9 @@ class AnalyzeMap(object):
         self.P = PH.Plotter(self.plotspecs, label=False, figsize=(10., 8.))
 
         self.plot_events(self.P.axdict['B'], results)  # PSTH
-        if imagefile is not None:
-            self.MT.get_image(imagefile)
-            self.MT.load_images()
+        # if imagefile is not None:
+        #     self.MT.get_image(imagefile)
+        #     self.MT.load_images()
             # print (self.MT.imagemetadata)
             # self.MT.show_images()
             # exit(1)
